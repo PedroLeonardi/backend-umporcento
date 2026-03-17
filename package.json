@@ -4,7 +4,6 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "scripts": {
   "start": "node server.js",
   "build": "npm install",
     "dev": "nodemon server.js",

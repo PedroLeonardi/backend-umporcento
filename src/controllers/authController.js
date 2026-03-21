@@ -1,45 +1,49 @@
 import User from '../models/user.js';
 import { put } from '@vercel/blob';
+import admin from 'firebase-admin';
 
+// Função para limpar o nome da foto e evitar erros em URLs
 const sanitize = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_").replace(/[^a-zA-Z0-9._-]/g, "");
 
 export default class AuthController {
+    
     static async syncUser(req, res) {
-    try {
-        const { uid, email, name, picture, firebase } = req.user;
-        const providerId = firebase.sign_in_provider; 
-        
-        // Verifica se a Master Key foi enviada no Header de uma requisição específica
-        const adminKey = req.headers['x-admin-key']; 
-        const isMaster = adminKey === process.env.ADMIN_MASTER_KEY;
+        try {
+            const { uid, email, name, picture, firebase } = req.user;
+            const providerId = firebase.sign_in_provider; 
+            
+            // Verifica se a Master Key foi enviada no Header de uma requisição específica
+            const adminKey = req.headers['x-admin-key']; 
+            const isMaster = adminKey === process.env.ADMIN_MASTER_KEY;
 
-        const [user, created] = await User.findOrCreate({
-            where: { firebaseUid: uid },
-            defaults: {
-                nome: name || "Usuário do Sistema",
-                email: email,
-                foto: picture || null,
-                provedor: providerId,
-                role: isMaster ? 'admin' : 'user' // Define como admin se a chave bater
+            const [user, created] = await User.findOrCreate({
+                where: { firebaseUid: uid },
+                defaults: {
+                    nome: name || "Usuário do Sistema",
+                    email: email,
+                    foto: picture || null,
+                    provedor: providerId,
+                    role: isMaster ? 'admin' : 'user' // Define como admin se a chave bater
+                }
+            });
+
+            // Se o usuário já existia mas você enviou a chave agora, ele vira admin
+            if (!created && isMaster && user.role !== 'admin') {
+                user.role = 'admin';
+                await user.save();
             }
-        });
 
-        // Se o usuário já existia mas você enviou a chave agora, ele vira admin
-        if (!created && isMaster && user.role !== 'admin') {
-            user.role = 'admin';
-            await user.save();
+            return res.status(200).json({
+                message: isMaster ? "Acesso administrativo sincronizado" : "Usuário sincronizado",
+                user
+            });
+        } catch (error) {
+            console.error("Erro na sincronia:", error);
+            return res.status(500).json({ error: "Erro interno" });
         }
-
-        return res.status(200).json({
-            message: isMaster ? "Acesso administrativo sincronizado" : "Usuário sincronizado",
-            user
-        });
-    } catch (error) {
-        console.error("Erro na sincronia:", error);
-        return res.status(500).json({ error: "Erro interno" });
     }
-}
-static async updateProfile(req, res) {
+
+    static async updateProfile(req, res) {
         try {
             const { uid } = req.user; // Funciona com Firebase ou com o seu bypass dev-vito
             const { nome } = req.body;
@@ -79,6 +83,7 @@ static async updateProfile(req, res) {
             return res.status(500).json({ error: "Erro interno ao atualizar perfil" });
         }
     }
+
     static async sendPasswordReset(req, res) {
         try {
             const { email } = req.user; // Pega o e-mail do token autenticado
@@ -96,5 +101,35 @@ static async updateProfile(req, res) {
         }
     }
 
+    // 👇 NOVA FUNÇÃO PARA VERIFICAR SE O E-MAIL EXISTE ANTES DO RESET 👇
+    static async checkEmailExists(req, res) {
+        try {
+            const { email } = req.body;
+            
+            if (!email) {
+                return res.status(400).json({ message: "E-mail não fornecido." });
+            }
 
+            // Verifica no banco Neon se o usuário existe
+            const user = await User.findOne({ where: { email } });
+
+            if (!user) {
+                return res.status(404).json({ exists: false, message: "E-mail não encontrado no sistema." });
+            }
+
+            // Impede redefinição de quem loga só pelo Google
+            if (user.provedor === 'google.com') {
+                return res.status(400).json({ 
+                    exists: true, 
+                    message: "Esta conta usa login do Google. Altere sua senha diretamente no Google." 
+                });
+            }
+
+            // Retorna um JSON bonitinho confirmando que está tudo certo
+            return res.status(200).json({ exists: true });
+        } catch (error) {
+            console.error("Erro ao checar e-mail:", error);
+            return res.status(500).json({ error: "Erro interno do servidor" });
+        }
+    }
 }

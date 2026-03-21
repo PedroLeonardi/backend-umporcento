@@ -1,4 +1,7 @@
 import User from '../models/user.js';
+import { put } from '@vercel/blob';
+
+const sanitize = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_").replace(/[^a-zA-Z0-9._-]/g, "");
 
 export default class AuthController {
     static async syncUser(req, res) {

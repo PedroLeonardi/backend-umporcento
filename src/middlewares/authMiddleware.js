@@ -15,16 +15,14 @@ export const checkAuth = async (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     // 1. ATALHO PARA DESENVOLVIMENTO (LEITOR UNIVERSAL)
-    // Se você enviar 'Bearer dev-vito' no Insomnia, ele pula a validação real
     if (process.env.NODE_ENV === 'development' && authHeader === 'Bearer dev-vito') {
         console.log("⚠️ TESTE: Acesso concedido via Leitor Universal (bypass Firebase)");
         
-        // Simulamos o payload do Firebase. 
-        // IMPORTANTE: Esse 'uid' deve ser o mesmo que você salvou no banco Neon para o seu usuário de teste.
         req.user = {
             uid: "UztdlhJvjlN4Ey3UYh25k4zajj52", 
             email: "teste@email.com",
-            name: "Usuário do Sistema"
+            name: "Usuário do Sistema",
+            email_verified: true // Simulamos que o bypass também está verificado
         };
         return next();
     }
@@ -38,6 +36,20 @@ export const checkAuth = async (req, res, next) => {
 
     try {
         const decodedToken = await admin.auth().verifyIdToken(token);
+        
+        // 👇 TRAVA DE SEGURANÇA DO BACKEND 👇
+        // Verificamos se o email_verified é explicitamente falso.
+        // E garantimos que isto se aplica a logins feitos com e-mail/palavra-passe, 
+        // já que contas do Google costumam vir como 'true' por padrão.
+        if (decodedToken.email_verified === false && decodedToken.firebase?.sign_in_provider === 'password') {
+            console.log(`🔒 [BACKEND] Bloqueio de segurança: Tentativa de acesso com e-mail não verificado (${decodedToken.email}).`);
+            return res.status(403).json({ 
+                message: "Acesso bloqueado: O e-mail ainda não foi verificado.",
+                code: "EMAIL_NOT_VERIFIED"
+            });
+        }
+        // 👆 FIM DA TRAVA 👇
+
         req.user = decodedToken;
         next();
     } catch (error) {

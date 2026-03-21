@@ -1,5 +1,5 @@
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\config\database.js
+ARQUIVO: D:\_backend-VITO\src\config\database.js
 =========================================
 
 import { Sequelize } from 'sequelize';
@@ -36,7 +36,7 @@ export default sequelize;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\config\supabase.js
+ARQUIVO: D:\_backend-VITO\src\config\supabase.js
 =========================================
 
 import { createClient } from '@supabase/supabase-js';
@@ -50,7 +50,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\controllers\authController.js
+ARQUIVO: D:\_backend-VITO\src\controllers\authController.js
 =========================================
 
 import User from '../models/user.js';
@@ -154,7 +154,7 @@ static async updateProfile(req, res) {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\controllers\mentoriaController.js
+ARQUIVO: D:\_backend-VITO\src\controllers\mentoriaController.js
 =========================================
 
 import { put , del} from '@vercel/blob';
@@ -557,7 +557,7 @@ static async deleteFull(req, res) {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\controllers\progressoController.js
+ARQUIVO: D:\_backend-VITO\src\controllers\progressoController.js
 =========================================
 
 import { Progresso, User, Capitulo, Mentoria } from '../models/index.js';
@@ -843,7 +843,7 @@ static async getBiblioteca(req, res) {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\controllers\questaoController.js
+ARQUIVO: D:\_backend-VITO\src\controllers\questaoController.js
 =========================================
 
 import {supabase} from "../config/supabase.js"
@@ -941,7 +941,7 @@ if (files && files.audio) {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\controllers\recomendacaoController.js
+ARQUIVO: D:\_backend-VITO\src\controllers\recomendacaoController.js
 =========================================
 
 import { Mentoria, User, Progresso, Capitulo, UserMentoriaView, Categoria } from '../models/index.js';
@@ -1108,7 +1108,7 @@ export default class RecomendacaoController {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\controllers\testeController.js
+ARQUIVO: D:\_backend-VITO\src\controllers\testeController.js
 =========================================
 
 import Teste from '../models/teste.js';
@@ -1143,7 +1143,66 @@ export const postTest = async (req, res) => {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\jobs\limpeza.js
+ARQUIVO: D:\_backend-VITO\src\controllers\webhookController.js
+=========================================
+
+import { Assinatura, User } from '../models/index.js';
+
+export default class WebhookController {
+    static async handleRevenueCat(req, res) {
+        try {
+            // O RevenueCat envia os dados dentro de req.body.event
+            const evento = req.body.event;
+            
+            // Segurança básica: validar o token (você define isso no painel do RC)
+            const authToken = req.headers.authorization;
+            if (authToken !== `Bearer ${process.env.REVENUECAT_WEBHOOK_SECRET}`) {
+                return res.status(401).json({ error: "Não autorizado" });
+            }
+
+            // O app_user_id é o uid do Firebase
+            const firebaseUid = evento.app_user_id; 
+            const user = await User.findOne({ where: { firebaseUid } });
+            
+            if (!user) return res.status(200).send("Usuário não encontrado.");
+
+            const externalId = evento.original_transaction_id;
+            const dataExpiracao = new Date(evento.expiration_at_ms);
+
+            switch (evento.type) {
+                case 'INITIAL_PURCHASE':
+                case 'RENEWAL':
+                    await Assinatura.upsert({
+                        userId: user.id,
+                        status: 'active',
+                        planoId: evento.product_id,
+                        dataExpiracao: dataExpiracao,
+                        platform: evento.store,
+                        externalId: externalId
+                    });
+                    break;
+
+                case 'EXPIRATION':
+                    await Assinatura.update(
+                        { status: 'expired' },
+                        { where: { userId: user.id } }
+                    );
+                    break;
+            }
+
+            return res.status(200).send("Webhook recebido e processado.");
+            
+        } catch (error) {
+            console.error("Erro no Webhook:", error);
+            return res.status(500).send("Erro interno");
+        }
+    }
+}
+
+
+
+=========================================
+ARQUIVO: D:\_backend-VITO\src\jobs\limpeza.js
 =========================================
 
 import cron from 'node-cron';
@@ -1186,7 +1245,7 @@ export default iniciarLimpeza;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\middlewares\adminMiddleware.js
+ARQUIVO: D:\_backend-VITO\src\middlewares\adminMiddleware.js
 =========================================
 
 // src/middlewares/adminMiddleware.js
@@ -1209,7 +1268,7 @@ export const isAdmin = async (req, res, next) => {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\middlewares\authMiddleware.js
+ARQUIVO: D:\_backend-VITO\src\middlewares\authMiddleware.js
 =========================================
 
 import admin from 'firebase-admin';
@@ -1263,7 +1322,7 @@ export const checkAuth = async (req, res, next) => {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\middlewares\masterKeyMiddleware.js
+ARQUIVO: D:\_backend-VITO\src\middlewares\masterKeyMiddleware.js
 =========================================
 
 export const checkMasterKey = (req, res, next) => {
@@ -1295,7 +1354,7 @@ export const checkMasterKey = (req, res, next) => {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\middlewares\subscriptionMiddleware.js
+ARQUIVO: D:\_backend-VITO\src\middlewares\subscriptionMiddleware.js
 =========================================
 
 import { Assinatura } from '../models/index.js';
@@ -1330,7 +1389,7 @@ export const checkSubscription = async (req, res, next) => {
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\assinatura.js
+ARQUIVO: D:\_backend-VITO\src\models\assinatura.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1353,7 +1412,7 @@ export default Assinatura;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\capitulo.js
+ARQUIVO: D:\_backend-VITO\src\models\capitulo.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1385,7 +1444,7 @@ export default Capitulo;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\categoria.js
+ARQUIVO: D:\_backend-VITO\src\models\categoria.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1401,7 +1460,7 @@ export default Categoria;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\index.js
+ARQUIVO: D:\_backend-VITO\src\models\index.js
 =========================================
 
 import User from './user.js';
@@ -1449,7 +1508,7 @@ export { User, Mentoria, Capitulo, Progresso, Assinatura, UserMentoriaView, Cate
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\mentoria.js
+ARQUIVO: D:\_backend-VITO\src\models\mentoria.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1477,7 +1536,7 @@ export default Mentoria;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\progresso.js
+ARQUIVO: D:\_backend-VITO\src\models\progresso.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1542,7 +1601,7 @@ export default Progresso;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\questao.js
+ARQUIVO: D:\_backend-VITO\src\models\questao.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1567,7 +1626,7 @@ export default Questao;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\teste.js
+ARQUIVO: D:\_backend-VITO\src\models\teste.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1601,7 +1660,7 @@ export default Teste;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\user.js
+ARQUIVO: D:\_backend-VITO\src\models\user.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1639,7 +1698,7 @@ export default User;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\models\userMentoriaView.js
+ARQUIVO: D:\_backend-VITO\src\models\userMentoriaView.js
 =========================================
 
 import { DataTypes } from 'sequelize';
@@ -1673,7 +1732,7 @@ export default UserMentoriaView;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\routes\authRoutes.js
+ARQUIVO: D:\_backend-VITO\src\routes\authRoutes.js
 =========================================
 
 import { Router } from 'express';
@@ -1697,7 +1756,7 @@ export default router;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\routes\mentoriaRoutes.js
+ARQUIVO: D:\_backend-VITO\src\routes\mentoriaRoutes.js
 =========================================
 
 import { Router } from 'express';
@@ -1746,7 +1805,7 @@ export default router;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\routes\progressoRoutes.js
+ARQUIVO: D:\_backend-VITO\src\routes\progressoRoutes.js
 =========================================
 
 import { Router } from 'express';
@@ -1782,7 +1841,7 @@ export default router;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\routes\questaoRoutes.js
+ARQUIVO: D:\_backend-VITO\src\routes\questaoRoutes.js
 =========================================
 
 import { Router } from 'express';
@@ -1813,7 +1872,7 @@ export default router;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\routes\recomendacaoRoutes.js
+ARQUIVO: D:\_backend-VITO\src\routes\recomendacaoRoutes.js
 =========================================
 
 import { Router } from 'express';
@@ -1834,7 +1893,7 @@ export default router;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\routes\testeRoutes.js
+ARQUIVO: D:\_backend-VITO\src\routes\testeRoutes.js
 =========================================
 
 import { Router } from 'express';
@@ -1851,7 +1910,7 @@ export default router;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\src\app.js
+ARQUIVO: D:\_backend-VITO\src\app.js
 =========================================
 
 import express from 'express';
@@ -1862,6 +1921,8 @@ import Mentoria from './routes/mentoriaRoutes.js'
 import authRoutes from './routes/authRoutes.js'; 
 import progressoRoutes from './routes/progressoRoutes.js'
 import recomendacaoRoutes from './routes/recomendacaoRoutes.js';
+
+import WebhookController from './controllers/webhookController.js';
 
 import { checkAuth } from './middlewares/authMiddleware.js';
 import { checkSubscription } from './middlewares/subscriptionMiddleware.js';
@@ -1885,6 +1946,7 @@ app.use("/questoes",checkAuth, questao); // Precisa do "checkSubscription"
 app.use("/mentorias", Mentoria) // Precisa do "checkSubscription" dentro do seu route.
 app.use("/progresso", progressoRoutes); // Precisa do "checkSubscription" 
 app.use("/recomendacoes", recomendacaoRoutes); // <-- NOVO
+app.post('/webhooks/revenuecat', WebhookController.handleRevenueCat);
 
 
 export default app;
@@ -1892,7 +1954,7 @@ export default app;
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\package.json
+ARQUIVO: D:\_backend-VITO\package.json
 =========================================
 
 {
@@ -1901,7 +1963,8 @@ ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\package.json
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
+  "start": "node server.js",
+  "build": "npm install",
     "dev": "nodemon server.js",
     "test:routes": "bash test.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -1933,7 +1996,22 @@ ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\package.json
 
 
 =========================================
-ARQUIVO: D:\_VITO-F\ProjetoCoach2\BackEnd\projeto-coach\server.js
+ARQUIVO: D:\_backend-VITO\README.md
+=========================================
+
+# backend-projeto-coach
+
+serviços provedores que estamos utilizando 
+
+supabase (banco de dados | desconetado de produção)
+vercel blob (storage de imagem)
+vercel neon (banco de dados)
+firebase ( servico de autehticação )
+
+
+
+=========================================
+ARQUIVO: D:\_backend-VITO\server.js
 =========================================
 
 import app from './src/app.js';

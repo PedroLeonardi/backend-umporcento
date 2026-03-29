@@ -101,7 +101,6 @@ export default class AuthController {
         }
     }
 
-    // 👇 NOVA FUNÇÃO PARA VERIFICAR SE O E-MAIL EXISTE ANTES DO RESET 👇
     static async checkEmailExists(req, res) {
         try {
             const { email } = req.body;
@@ -130,6 +129,28 @@ export default class AuthController {
         } catch (error) {
             console.error("Erro ao checar e-mail:", error);
             return res.status(500).json({ error: "Erro interno do servidor" });
+        }
+    }
+
+    // 👇 NOVA FUNÇÃO AQUI: Responsável por apagar os dados do usuário para a LGPD
+    static async deleteUser(req, res) {
+        try {
+            const { uid } = req.user; // Vem do token do Firebase validado pelo middleware
+
+            const user = await User.findOne({ where: { firebaseUid: uid } });
+
+            if (!user) {
+                return res.status(404).json({ message: "Usuário não encontrado no banco de dados." });
+            }
+
+            // O destroy vai apagar o usuário e acionar o CASCADE para limpar Progressos, Views e Assinaturas.
+            await user.destroy();
+
+            return res.status(200).json({ message: "Dados do usuário excluídos com sucesso do banco." });
+
+        } catch (error) {
+            console.error("Erro ao excluir usuário do banco:", error);
+            return res.status(500).json({ error: "Erro interno ao excluir dados do usuário." });
         }
     }
 }

@@ -34,18 +34,11 @@ export const checkAuth = async (req, res, next) => {
 
     try {
         // =========================================================================
-        // 🟢 SOLUÇÃO BRANDA (PADRÃO - ULTRA RÁPIDA)
-        // O Firebase confia no token atual. Se a senha for alterada, o usuário será
-        // deslogado dos outros aparelhos em até 1 hora (quando o token vencer).
+        // 🔴 SOLUÇÃO PARANOICA (TEMPO REAL) ATIVADA
+        // O servidor verificará com o Google a CADA requisição se a senha não 
+        // foi alterada ou a conta revogada.
         // =========================================================================
-        const decodedToken = await admin.auth().verifyIdToken(token);
-
-        // =========================================================================
-        // 🔴 SOLUÇÃO PARANOICA (TEMPO REAL - MAIS LENTA)
-        // Para ativar, comente a linha acima e descomente a linha abaixo.
-        // O servidor verificará com o Google a CADA clique se a senha não foi alterada.
-        // =========================================================================
-        // const decodedToken = await admin.auth().verifyIdToken(token, true);
+        const decodedToken = await admin.auth().verifyIdToken(token, true); // 👈 O 'true' faz a mágica
         
         // Trava de E-mail Verificado
         if (decodedToken.email_verified === false && decodedToken.firebase?.sign_in_provider === 'password') {
@@ -58,10 +51,10 @@ export const checkAuth = async (req, res, next) => {
         req.user = decodedToken;
         next();
     } catch (error) {
-        // Se a solução "paranoica" estiver ativada e a senha tiver mudado, ele cai aqui:
+        // 👇 Agora, se a conta for banida ou senha trocada, ele cai especificamente aqui:
         if (error.code === 'auth/id-token-revoked') {
-            console.log("🚫 [BACKEND] Token revogado por alteração de senha.");
-            return res.status(401).json({ message: "Sessão expirada. Faça login novamente." });
+            console.log("🚫 [BACKEND] Token revogado por alteração de senha ou bloqueio.");
+            return res.status(401).json({ message: "Sessão expirada ou revogada. Faça login novamente." });
         }
         
         return res.status(403).json({ message: "Sessão inválida ou expirada." });

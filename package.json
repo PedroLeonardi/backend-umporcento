@@ -4,8 +4,8 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-  "start": "node server.js",
-  "build": "npm install",
+    "start": "node server.js",
+    "build": "npm install",
     "dev": "nodemon server.js",
     "test:routes": "bash test.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -20,13 +20,16 @@
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.3.1",
     "firebase-admin": "^12.7.0",
+    "helmet": "^8.1.0",
     "multer": "^2.0.2",
     "music-metadata": "^11.11.2",
     "mysql2": "^3.16.2",
     "node-cron": "^4.2.1",
     "pg": "^8.18.0",
     "pg-hstore": "^2.3.4",
+    "sanitize-html": "^2.17.2",
     "sequelize": "^6.37.7"
   },
   "devDependencies": {

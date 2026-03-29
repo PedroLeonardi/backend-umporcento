@@ -1,4 +1,5 @@
 import { Progresso, User, Capitulo, Mentoria } from '../models/index.js';
+import db from '../config/database.js'; // 👈 ADICIONE ESTA LINHA AQUI
 
 export default class ProgressoController {
     
@@ -165,114 +166,84 @@ export default class ProgressoController {
     }
     // Rota da Página "Minha Biblioteca"
 static async getBiblioteca(req, res) {
-        console.log("📚 [BIBLIOTECA] Calculando progresso real...");
+        console.log("📚 [BIBLIOTECA] Processando progresso diretamente no banco (SQL Otimizado)...");
         try {
             const { status = 'andamento', page = 1, limit = 5 } = req.query;
             const limitNum = parseInt(limit);
             const pageNum = parseInt(page);
+            const offset = (pageNum - 1) * limitNum;
 
             const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
-            
-            // 1. Busca TODO o histórico do usuário
-            const progressos = await Progresso.findAll({
-                where: { userId: user.id },
-                include: [{
-                    model: Capitulo,
-                    as: 'capitulo',
-                    required: true,
-                    include: [{ model: Mentoria, as: 'mentoria', required: true }]
-                }],
-                order: [['ultimaEscuta', 'DESC']] // O primeiro da lista é o que ele ouviu por último
-            });
+            if (!user) return res.status(404).json({ message: "Usuário não encontrado" });
 
-            // 2. Agrupamento e Contagem
-            const mapaMentorias = new Map();
+            // 1. Query Principal: O Postgres agrupa as mentorias, conta os capítulos, 
+            // descobre onde o usuário parou e já filtra o status (andamento/concluido).
+            const query = `
+                SELECT 
+                    m.id, 
+                    m.titulo, 
+                    m."subText", 
+                    m."fotoUrl",
+                    MAX(p."ultimaEscuta") as "data",
+                    (SELECT c2.titulo FROM capitulos c2 JOIN progresso_usuarios pu ON pu."capituloId" = c2.id WHERE c2."mentoriaId" = m.id AND pu."userId" = :userId ORDER BY pu."ultimaEscuta" DESC LIMIT 1) as "ultimoCapitulo",
+                    (SELECT pu."segundoAtual" FROM capitulos c2 JOIN progresso_usuarios pu ON pu."capituloId" = c2.id WHERE c2."mentoriaId" = m.id AND pu."userId" = :userId ORDER BY pu."ultimaEscuta" DESC LIMIT 1) as "progressoCapitulo",
+                    COUNT(DISTINCT c.id) AS "totalCapitulos",
+                    COUNT(DISTINCT CASE WHEN p.concluido = true THEN p."capituloId" END) AS "capitulosConcluidos"
+                FROM mentorias m
+                JOIN capitulos c ON c."mentoriaId" = m.id
+                JOIN progresso_usuarios p ON p."capituloId" = c.id AND p."userId" = :userId
+                GROUP BY m.id, m.titulo, m."subText", m."fotoUrl"
+                HAVING 
+                    (CASE 
+                        WHEN COUNT(DISTINCT c.id) > 0 AND COUNT(DISTINCT CASE WHEN p.concluido = true THEN p."capituloId" END) >= COUNT(DISTINCT c.id) THEN 'concluido'
+                        ELSE 'andamento'
+                    END) = :status
+                ORDER BY "data" DESC
+                LIMIT :limit OFFSET :offset
+            `;
 
-            // Precisamos saber o total de capítulos de cada mentoria.
-            // Para não fazer queries dentro de loop (lento), vamos pegar os IDs das mentorias encontradas.
-            const mentoriaIds = new Set();
-            progressos.forEach(p => {
-                if (p.capitulo?.mentoria) mentoriaIds.add(p.capitulo.mentoria.id);
-            });
+            // 2. Query de Contagem: Necessária para o celular saber se ainda tem botão "Ver mais"
+            const countQuery = `
+                SELECT COUNT(*) as total
+                FROM (
+                    SELECT m.id
+                    FROM mentorias m
+                    JOIN capitulos c ON c."mentoriaId" = m.id
+                    JOIN progresso_usuarios p ON p."capituloId" = c.id AND p."userId" = :userId
+                    GROUP BY m.id
+                    HAVING 
+                        (CASE 
+                            WHEN COUNT(DISTINCT c.id) > 0 AND COUNT(DISTINCT CASE WHEN p.concluido = true THEN p."capituloId" END) >= COUNT(DISTINCT c.id) THEN 'concluido'
+                            ELSE 'andamento'
+                        END) = :status
+                ) as subquery
+            `;
 
-            // Busca contagem total de capítulos para essas mentorias
-            const mentoriasInfos = await Mentoria.findAll({
-                where: { id: Array.from(mentoriaIds) },
-                include: [{ model: Capitulo, as: 'capitulos', attributes: ['id'] }]
-            });
+            // 3. Execução paralela e direta no motor do banco de dados
+            const [data, countResult] = await Promise.all([
+                db.query(query, {
+                    replacements: { userId: user.id, status, limit: limitNum, offset },
+                    type: db.QueryTypes.SELECT
+                }),
+                db.query(countQuery, {
+                    replacements: { userId: user.id, status },
+                    type: db.QueryTypes.SELECT
+                })
+            ]);
 
-            // Cria um dicionário: ID da Mentoria -> Total de Capítulos
-            const totaisPorMentoria = {};
-            mentoriasInfos.forEach(m => {
-                totaisPorMentoria[m.id] = m.capitulos.length;
-            });
-
-            // 3. Processa o status real
-            progressos.forEach(p => {
-                const m = p.capitulo.mentoria;
-                
-                if (!mapaMentorias.has(m.id)) {
-                    // Inicializa o objeto da mentoria na primeira vez que a encontramos
-                    mapaMentorias.set(m.id, {
-                        id: m.id,
-                        titulo: m.titulo,
-                        subText: m.subText,
-                        fotoUrl: m.fotoUrl,
-                        // Como a lista está ordenada por data DESC, o primeiro registro é onde ele parou
-                        ultimoCapitulo: p.capitulo.titulo, 
-                        progressoCapitulo: p.segundoAtual,
-                        data: p.ultimaEscuta,
-                        capitulosConcluidos: new Set(), // Usamos Set para não contar o mesmo capitulo 2x
-                        totalCapitulos: totaisPorMentoria[m.id] || 0
-                    });
-                }
-
-                // Adiciona o capítulo ao Set de concluídos se for true
-                if (p.concluido) {
-                    mapaMentorias.get(m.id).capitulosConcluidos.add(p.capitulo.id);
-                }
-            });
-
-            // 4. Decide se é 'andamento' ou 'concluido'
-            const listaFinal = [];
-            
-            mapaMentorias.forEach(item => {
-                const totalConcluidos = item.capitulosConcluidos.size;
-                const totalExistentes = item.totalCapitulos;
-
-                // Regra de Ouro: Só é concluído se ouviu TODOS os capítulos
-                // Se totalExistentes for 0 (erro de cadastro), assumimos concluído para não travar
-                const isCompleto = totalExistentes > 0 && totalConcluidos >= totalExistentes;
-
-                const statusCalculado = isCompleto ? 'concluido' : 'andamento';
-
-                // Filtra pelo que o Front-end pediu na query (?status=...)
-                if (statusCalculado === status) {
-                    listaFinal.push({
-                        ...item,
-                        // Removemos o Set antes de enviar o JSON
-                        capitulosConcluidos: totalConcluidos, 
-                        status: statusCalculado
-                    });
-                }
-            });
-
-            // 5. Paginação Manual
-            const startIndex = (pageNum - 1) * limitNum;
-            const endIndex = pageNum * limitNum;
-            const dadosPaginados = listaFinal.slice(startIndex, endIndex);
+            const total = parseInt(countResult[0].total, 10);
 
             return res.status(200).json({
-                data: dadosPaginados,
+                data: data,
                 pagination: {
                     page: pageNum,
-                    total: listaFinal.length,
-                    hasMore: endIndex < listaFinal.length
+                    total: total,
+                    hasMore: offset + data.length < total
                 }
             });
 
         } catch (error) {
-            console.error("Erro biblioteca:", error);
+            console.error("Erro na biblioteca otimizada:", error);
             res.status(500).json({ error: error.message });
         }
     }

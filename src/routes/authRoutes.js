@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import multer from 'multer';
 import AuthController from '../controllers/authController.js';
+import AdminController from '../controllers/adminController.js';
 import { checkAuth } from '../middlewares/authMiddleware.js';
+import { isAdmin } from '../middlewares/adminMiddleware.js';
 
 const router = Router();
 
@@ -29,6 +31,9 @@ const uploadProfile = multer({
     }
 });
 
+// Apenas um admin logado consegue transformar o usuário de ID "X" em admin.
+router.put('/promote/:targetUserId', checkAuth, isAdmin, AuthController.promoteToAdmin);
+
 // Rota que o App chama logo após logar no Firebase (Mobile)
 router.post('/sync', checkAuth, AuthController.syncUser);
 
@@ -40,6 +45,12 @@ router.post('/check-email', AuthController.checkEmailExists);
 
 // Excluir dados do usuário
 router.delete('/delete', checkAuth, AuthController.deleteUser);
+
+// Rota para buscar as estatísticas do Dashboard (BI)
+// Só acessível para Admins logados.
+router.get('/dashboard', checkAuth, isAdmin, AdminController.getDashboardStats);
+router.get('/admin/financas', checkAuth, isAdmin, AdminController.getFinancas);
+router.put('/admin/financas', checkAuth, isAdmin, AdminController.updateFinancas);
 
 // 👇 Tratamento de Erros do Multer
 router.use((err, req, res, next) => {

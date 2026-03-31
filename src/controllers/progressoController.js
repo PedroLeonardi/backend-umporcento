@@ -1,12 +1,16 @@
 import { Progresso, User, Capitulo, Mentoria } from '../models/index.js';
-import db from '../config/database.js'; // 👈 ADICIONE ESTA LINHA AQUI
+import db from '../config/database.js';
 
 export default class ProgressoController {
     
     // Salva o segundo exato onde o usuário parou
     static async atualizar(req, res) {
         try {
-            const { capituloId, segundoAtual, concluido } = req.body;
+            const { capituloId, concluido } = req.body;
+            
+            // 🛡️ A TRAVA DE SEGURANÇA AQUI: 
+            // Pega o que o celular mandou. Se for negativo (ex: -77), força a ser 0.
+            const segundoAtual = Math.max(0, req.body.segundoAtual || 0);
             
             const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
             if (!user) return res.status(404).json({ message: "Usuário não sincronizado." });
@@ -17,7 +21,7 @@ export default class ProgressoController {
             let tempoParaSalvar = segundoAtual;
             let statusConcluido = concluido;
 
-            // 🛡️ LÓGICA DE RESET CORRIGIDA: 
+            // LÓGICA DE RESET CORRIGIDA: 
             // Só faz a verificação matemática se a duração gravada no banco for maior que ZERO
             const temDuracaoValida = capitulo && capitulo.duracaoSegundos > 0;
             const chegouNoFinal = temDuracaoValida && (segundoAtual >= capitulo.duracaoSegundos - 2);
@@ -64,8 +68,6 @@ export default class ProgressoController {
         }
     }
 
-
-    
     static async atualizarLeitura(req, res) {
         console.log("📥 [LEITURA] Recebendo requisição para salvar scroll...");
         try {
@@ -110,9 +112,6 @@ export default class ProgressoController {
         }
     }
 
-    
-
-    // Busca o resumo para o botão da tela de detalhes
     // Busca o resumo para o botão da tela de detalhes
     static async getResumoMentoria(req, res) {
         console.log(`🔍 [RESUMO] Buscando dados de retorno da mentoria ${req.params.mentoriaId}...`);
@@ -144,8 +143,8 @@ export default class ProgressoController {
                     capituloId: primeiroCapitulo ? primeiroCapitulo.id : null,
                     tituloCapitulo: primeiroCapitulo ? primeiroCapitulo.titulo : null,
                     progresso: 0,
-                    capituloLeituraId: null, // <-- Faltava isso!
-                    scrollLeitura: 0         // <-- Faltava isso!
+                    capituloLeituraId: null,
+                    scrollLeitura: 0
                 });
             }
 
@@ -155,8 +154,8 @@ export default class ProgressoController {
                 capituloId: ultimoProgresso.capituloId,
                 tituloCapitulo: ultimoProgresso.capitulo.titulo,
                 progresso: ultimoProgresso.segundoAtual,
-                capituloLeituraId: ultimoProgresso.capituloLeituraId, // <-- Devolvemos pro Front
-                scrollLeitura: ultimoProgresso.scrollLeitura          // <-- Devolvemos pro Front
+                capituloLeituraId: ultimoProgresso.capituloLeituraId,
+                scrollLeitura: ultimoProgresso.scrollLeitura
             });
 
         } catch (error) {
@@ -164,8 +163,9 @@ export default class ProgressoController {
             res.status(500).json({ error: error.message });
         }
     }
+
     // Rota da Página "Minha Biblioteca"
-static async getBiblioteca(req, res) {
+    static async getBiblioteca(req, res) {
         console.log("📚 [BIBLIOTECA] Processando progresso diretamente no banco (SQL Otimizado)...");
         try {
             const { status = 'andamento', page = 1, limit = 5 } = req.query;
@@ -176,8 +176,6 @@ static async getBiblioteca(req, res) {
             const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
             if (!user) return res.status(404).json({ message: "Usuário não encontrado" });
 
-            // 1. Query Principal: O Postgres agrupa as mentorias, conta os capítulos, 
-            // descobre onde o usuário parou e já filtra o status (andamento/concluido).
             const query = `
                 SELECT 
                     m.id, 
@@ -202,7 +200,6 @@ static async getBiblioteca(req, res) {
                 LIMIT :limit OFFSET :offset
             `;
 
-            // 2. Query de Contagem: Necessária para o celular saber se ainda tem botão "Ver mais"
             const countQuery = `
                 SELECT COUNT(*) as total
                 FROM (
@@ -219,7 +216,6 @@ static async getBiblioteca(req, res) {
                 ) as subquery
             `;
 
-            // 3. Execução paralela e direta no motor do banco de dados
             const [data, countResult] = await Promise.all([
                 db.query(query, {
                     replacements: { userId: user.id, status, limit: limitNum, offset },

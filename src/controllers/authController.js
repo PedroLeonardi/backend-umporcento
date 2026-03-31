@@ -153,4 +153,26 @@ export default class AuthController {
             return res.status(500).json({ error: "Erro interno ao excluir dados do usuário." });
         }
     }
+    static async promoteToAdmin(req, res) {
+        try {
+            const { targetUserId } = req.params; // ID do usuário que vai virar admin
+
+            const userToPromote = await User.findByPk(targetUserId);
+
+            if (!userToPromote) {
+                return res.status(404).json({ message: "Usuário alvo não encontrado." });
+            }
+
+            userToPromote.role = 'admin';
+            await userToPromote.save();
+
+            return res.status(200).json({ 
+                message: `${userToPromote.nome} agora é um administrador.` 
+            });
+
+        } catch (error) {
+            console.error("Erro ao promover usuário:", error);
+            return res.status(500).json({ error: "Erro interno do servidor." });
+        }
+    }
 }

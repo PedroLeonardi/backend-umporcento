@@ -5,6 +5,7 @@ import Progresso from './progresso.js';
 import Assinatura from './assinatura.js';
 import UserMentoriaView from './userMentoriaView.js';
 import Categoria from './categoria.js'; 
+import FinancasConfig from './financasConfig.js';
 
 // 1. Mentoria <-> Capitulos
 Mentoria.hasMany(Capitulo, { foreignKey: 'mentoriaId', as: 'capitulos', onDelete: 'CASCADE' });
@@ -38,4 +39,4 @@ Categoria.belongsToMany(Mentoria, {
     foreignKey: 'categoriaId' 
 });
 
-export { User, Mentoria, Capitulo, Progresso, Assinatura, UserMentoriaView, Categoria };
+export { User, Mentoria, Capitulo, Progresso, Assinatura, UserMentoriaView, Categoria, FinancasConfig };

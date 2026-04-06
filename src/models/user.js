@@ -22,6 +22,11 @@ const User = db.define('User', {
     role: {
         type: DataTypes.ENUM('user', 'admin'),
         defaultValue: 'user'
+    },
+    // 👇 O novo campo para controle rápido de acesso Premium
+    isPremium: {
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
     }
 }, { 
     tableName: 'usuarios',

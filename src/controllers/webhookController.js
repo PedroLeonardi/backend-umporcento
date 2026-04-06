@@ -6,7 +6,7 @@ export default class WebhookController {
             // O RevenueCat envia os dados dentro de req.body.event
             const evento = req.body.event;
             
-            // Segurança básica: validar o token (você define isso no painel do RC)
+            // Segurança básica: validar o token configurado no painel do RC
             const authToken = req.headers.authorization;
             if (authToken !== `Bearer ${process.env.REVENUECAT_WEBHOOK_SECRET}`) {
                 return res.status(401).json({ error: "Não autorizado" });
@@ -16,7 +16,7 @@ export default class WebhookController {
             const firebaseUid = evento.app_user_id; 
             const user = await User.findOne({ where: { firebaseUid } });
             
-            if (!user) return res.status(200).send("Usuário não encontrado.");
+            if (!user) return res.status(200).send("Usuário não encontrado no banco.");
 
             const externalId = evento.original_transaction_id;
             const dataExpiracao = new Date(evento.expiration_at_ms);
@@ -32,6 +32,11 @@ export default class WebhookController {
                         platform: evento.store,
                         externalId: externalId
                     });
+
+                    // 👇 ATUALIZA A FLAG DIRETO NO USUÁRIO
+                    user.isPremium = true;
+                    await user.save();
+                    console.log(`✅ [WEBHOOK] Usuário ${user.email} agora é PREMIUM!`);
                     break;
 
                 case 'EXPIRATION':
@@ -39,6 +44,11 @@ export default class WebhookController {
                         { status: 'expired' },
                         { where: { userId: user.id } }
                     );
+
+                    // 👇 TIRA O STATUS PREMIUM SE A ASSINATURA CAIR
+                    user.isPremium = false;
+                    await user.save();
+                    console.log(`❌ [WEBHOOK] Assinatura do usuário ${user.email} expirou.`);
                     break;
             }
 

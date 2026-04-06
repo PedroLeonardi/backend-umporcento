@@ -50,6 +50,147 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 
 
 =========================================
+ARQUIVO: D:\_backend-VITO\src\controllers\adminController.js
+=========================================
+
+import { User, Progresso, Mentoria, Capitulo, Assinatura, FinancasConfig } from '../models/index.js';
+import db from '../config/database.js';
+import { Op } from 'sequelize';
+
+export default class AdminController {
+
+    // 👇 NOVA FUNÇÃO: Ler os custos atuais
+    static async getFinancas(req, res) {
+        try {
+            // findOrCreate garante que, se a linha 1 não existir, o Sequelize cria-a com zeros!
+            const [financas] = await FinancasConfig.findOrCreate({
+                where: { id: 1 },
+                defaults: { custoServidor: 0, custoMarketing: 0, outrosCustos: 0 }
+            });
+            return res.status(200).json(financas);
+        } catch (error) {
+            console.error("Erro ao ler finanças:", error);
+            res.status(500).json({ error: "Erro interno do servidor." });
+        }
+    }
+
+    // 👇 NOVA FUNÇÃO: Atualizar os custos pelo telemóvel
+    static async updateFinancas(req, res) {
+        try {
+            const { custoServidor, custoMarketing, outrosCustos } = req.body;
+            
+            const [financas] = await FinancasConfig.findOrCreate({ where: { id: 1 } });
+            
+            if (custoServidor !== undefined) financas.custoServidor = parseFloat(custoServidor);
+            if (custoMarketing !== undefined) financas.custoMarketing = parseFloat(custoMarketing);
+            if (outrosCustos !== undefined) financas.outrosCustos = parseFloat(outrosCustos);
+            
+            await financas.save();
+            return res.status(200).json({ message: "Custos atualizados com sucesso!", financas });
+        } catch (error) {
+            console.error("Erro ao atualizar finanças:", error);
+            res.status(500).json({ error: "Erro interno do servidor." });
+        }
+    }
+
+    // 👇 A Dashboard Atualizada
+    static async getDashboardStats(req, res) {
+        console.log("📊 [ADMIN] Gerando Dashboard de Inteligência de Negócios...");
+        try {
+            const trintaDiasAtras = new Date(new Date().setDate(new Date().getDate() - 30));
+
+            // [MANTÉM-SE A MESMA rawStatsQuery AQUI...]
+            const rawStatsQuery = `
+                WITH TopMentorias AS (
+                    SELECT m.titulo, COUNT(DISTINCT pu."userId") as ouvintes
+                    FROM progresso_usuarios pu
+                    JOIN capitulos c ON pu."capituloId" = c.id
+                    JOIN mentorias m ON c."mentoriaId" = m.id
+                    GROUP BY m.titulo
+                    ORDER BY ouvintes DESC
+                    LIMIT 5
+                ),
+                TopCategorias AS (
+                    SELECT cat.nome as categoria, COUNT(DISTINCT pu."userId") as ouvintes
+                    FROM progresso_usuarios pu
+                    JOIN capitulos c ON pu."capituloId" = c.id
+                    JOIN mentorias m ON c."mentoriaId" = m.id
+                    JOIN mentoria_categorias mc ON mc."mentoriaId" = m.id
+                    JOIN categorias cat ON mc."categoriaId" = cat.id
+                    GROUP BY cat.nome
+                    ORDER BY ouvintes DESC
+                    LIMIT 5
+                ),
+                CalculoTempo AS (
+                    SELECT 
+                        -- 👇 TRAVA AQUI: AND pu."segundoAtual" > 0
+                        COALESCE(SUM(CASE WHEN pu.concluido = false AND pu."segundoAtual" > 0 THEN pu."segundoAtual" ELSE 0 END), 0) +
+                        -- 👇 TRAVA AQUI: AND c."duracaoSegundos" > 0
+                        COALESCE(SUM(CASE WHEN pu.concluido = true AND c."duracaoSegundos" > 0 THEN c."duracaoSegundos" ELSE 0 END), 0) as tempo_total_segundos,
+                        COUNT(DISTINCT pu."userId") as total_ouvintes
+                    FROM progresso_usuarios pu
+                    JOIN capitulos c ON pu."capituloId" = c.id
+                )
+                SELECT 
+                    (SELECT json_agg(TopMentorias) FROM TopMentorias) as ranking_mentorias,
+                    (SELECT json_agg(TopCategorias) FROM TopCategorias) as ranking_categorias,
+                    (SELECT tempo_total_segundos FROM CalculoTempo) as tempo_total_segundos,
+                    (SELECT total_ouvintes FROM CalculoTempo) as total_ouvintes;
+            `;
+
+            // Executa tudo em paralelo, incluindo a leitura dos gastos (FinancasConfig)
+            const [rawStatsResult, totalUsers, activeUsers, payingUsers, financasResult] = await Promise.all([
+                db.query(rawStatsQuery, { type: db.QueryTypes.SELECT }),
+                User.count(),
+                User.count({ where: { updatedAt: { [Op.gte]: trintaDiasAtras } } }), 
+                Assinatura.count({ where: { status: 'active' } }),
+                FinancasConfig.findOrCreate({ where: { id: 1 }, defaults: { custoServidor: 0, custoMarketing: 0, outrosCustos: 0 } })
+            ]);
+
+            const useStats = rawStatsResult[0] || {};
+            const financas = financasResult[0]; // Extrai o objeto da tabela
+
+            let tempoMedioMinutos = 0;
+            if (useStats.total_ouvintes > 0) {
+                const tempoTotalMinutos = (useStats.tempo_total_segundos || 0) / 60;
+                tempoMedioMinutos = Math.round(tempoTotalMinutos / useStats.total_ouvintes);
+            }
+            
+            const ticketMedioPresumido = 24.90;
+            const lucroBrutoPresumido = payingUsers * ticketMedioPresumido;
+            
+            // 👇 A MÁGICA FINANCEIRA ACONTECE AQUI 👇
+            const gastosFixos = (financas.custoServidor || 0) + (financas.custoMarketing || 0) + (financas.outrosCustos || 0);
+            const lucroLiquidoPresumido = lucroBrutoPresumido - gastosFixos;
+
+            return res.status(200).json({
+                kpis: {
+                    totalUsers,
+                    activeUsers,
+                    activeUsersPercentage: totalUsers > 0 ? Math.round((activeUsers / totalUsers) * 100) : 0,
+                    payingUsers,
+                    payingUsersPercentage: totalUsers > 0 ? Math.round((payingUsers / totalUsers) * 100) : 0,
+                    tempoMedioMinutos,
+                    lucroBrutoPresumido,
+                    lucroLiquidoPresumido, // Agora com o cálculo real!
+                    gastosTotais: gastosFixos // Enviamos os gastos para o ecrã caso queira mostrar
+                },
+                rankings: {
+                    mentorias: useStats.ranking_mentorias || [],
+                    categorias: useStats.ranking_categorias || []
+                }
+            });
+
+        } catch (error) {
+            console.error("Erro ao gerar dashboard:", error);
+            res.status(500).json({ error: "Erro interno do servidor." });
+        }
+    }
+}
+
+
+
+=========================================
 ARQUIVO: D:\_backend-VITO\src\controllers\authController.js
 =========================================
 
@@ -156,7 +297,6 @@ export default class AuthController {
         }
     }
 
-    // 👇 NOVA FUNÇÃO PARA VERIFICAR SE O E-MAIL EXISTE ANTES DO RESET 👇
     static async checkEmailExists(req, res) {
         try {
             const { email } = req.body;
@@ -185,6 +325,50 @@ export default class AuthController {
         } catch (error) {
             console.error("Erro ao checar e-mail:", error);
             return res.status(500).json({ error: "Erro interno do servidor" });
+        }
+    }
+
+    // 👇 NOVA FUNÇÃO AQUI: Responsável por apagar os dados do usuário para a LGPD
+    static async deleteUser(req, res) {
+        try {
+            const { uid } = req.user; // Vem do token do Firebase validado pelo middleware
+
+            const user = await User.findOne({ where: { firebaseUid: uid } });
+
+            if (!user) {
+                return res.status(404).json({ message: "Usuário não encontrado no banco de dados." });
+            }
+
+            // O destroy vai apagar o usuário e acionar o CASCADE para limpar Progressos, Views e Assinaturas.
+            await user.destroy();
+
+            return res.status(200).json({ message: "Dados do usuário excluídos com sucesso do banco." });
+
+        } catch (error) {
+            console.error("Erro ao excluir usuário do banco:", error);
+            return res.status(500).json({ error: "Erro interno ao excluir dados do usuário." });
+        }
+    }
+    static async promoteToAdmin(req, res) {
+        try {
+            const { targetUserId } = req.params; // ID do usuário que vai virar admin
+
+            const userToPromote = await User.findByPk(targetUserId);
+
+            if (!userToPromote) {
+                return res.status(404).json({ message: "Usuário alvo não encontrado." });
+            }
+
+            userToPromote.role = 'admin';
+            await userToPromote.save();
+
+            return res.status(200).json({ 
+                message: `${userToPromote.nome} agora é um administrador.` 
+            });
+
+        } catch (error) {
+            console.error("Erro ao promover usuário:", error);
+            return res.status(500).json({ error: "Erro interno do servidor." });
         }
     }
 }
@@ -599,13 +783,18 @@ ARQUIVO: D:\_backend-VITO\src\controllers\progressoController.js
 =========================================
 
 import { Progresso, User, Capitulo, Mentoria } from '../models/index.js';
+import db from '../config/database.js';
 
 export default class ProgressoController {
     
     // Salva o segundo exato onde o usuário parou
     static async atualizar(req, res) {
         try {
-            const { capituloId, segundoAtual, concluido } = req.body;
+            const { capituloId, concluido } = req.body;
+            
+            // 🛡️ A TRAVA DE SEGURANÇA AQUI: 
+            // Pega o que o celular mandou. Se for negativo (ex: -77), força a ser 0.
+            const segundoAtual = Math.max(0, req.body.segundoAtual || 0);
             
             const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
             if (!user) return res.status(404).json({ message: "Usuário não sincronizado." });
@@ -616,7 +805,7 @@ export default class ProgressoController {
             let tempoParaSalvar = segundoAtual;
             let statusConcluido = concluido;
 
-            // 🛡️ LÓGICA DE RESET CORRIGIDA: 
+            // LÓGICA DE RESET CORRIGIDA: 
             // Só faz a verificação matemática se a duração gravada no banco for maior que ZERO
             const temDuracaoValida = capitulo && capitulo.duracaoSegundos > 0;
             const chegouNoFinal = temDuracaoValida && (segundoAtual >= capitulo.duracaoSegundos - 2);
@@ -663,8 +852,6 @@ export default class ProgressoController {
         }
     }
 
-
-    
     static async atualizarLeitura(req, res) {
         console.log("📥 [LEITURA] Recebendo requisição para salvar scroll...");
         try {
@@ -709,9 +896,6 @@ export default class ProgressoController {
         }
     }
 
-    
-
-    // Busca o resumo para o botão da tela de detalhes
     // Busca o resumo para o botão da tela de detalhes
     static async getResumoMentoria(req, res) {
         console.log(`🔍 [RESUMO] Buscando dados de retorno da mentoria ${req.params.mentoriaId}...`);
@@ -743,8 +927,8 @@ export default class ProgressoController {
                     capituloId: primeiroCapitulo ? primeiroCapitulo.id : null,
                     tituloCapitulo: primeiroCapitulo ? primeiroCapitulo.titulo : null,
                     progresso: 0,
-                    capituloLeituraId: null, // <-- Faltava isso!
-                    scrollLeitura: 0         // <-- Faltava isso!
+                    capituloLeituraId: null,
+                    scrollLeitura: 0
                 });
             }
 
@@ -754,8 +938,8 @@ export default class ProgressoController {
                 capituloId: ultimoProgresso.capituloId,
                 tituloCapitulo: ultimoProgresso.capitulo.titulo,
                 progresso: ultimoProgresso.segundoAtual,
-                capituloLeituraId: ultimoProgresso.capituloLeituraId, // <-- Devolvemos pro Front
-                scrollLeitura: ultimoProgresso.scrollLeitura          // <-- Devolvemos pro Front
+                capituloLeituraId: ultimoProgresso.capituloLeituraId,
+                scrollLeitura: ultimoProgresso.scrollLeitura
             });
 
         } catch (error) {
@@ -763,116 +947,83 @@ export default class ProgressoController {
             res.status(500).json({ error: error.message });
         }
     }
+
     // Rota da Página "Minha Biblioteca"
-static async getBiblioteca(req, res) {
-        console.log("📚 [BIBLIOTECA] Calculando progresso real...");
+    static async getBiblioteca(req, res) {
+        console.log("📚 [BIBLIOTECA] Processando progresso diretamente no banco (SQL Otimizado)...");
         try {
             const { status = 'andamento', page = 1, limit = 5 } = req.query;
             const limitNum = parseInt(limit);
             const pageNum = parseInt(page);
+            const offset = (pageNum - 1) * limitNum;
 
             const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
-            
-            // 1. Busca TODO o histórico do usuário
-            const progressos = await Progresso.findAll({
-                where: { userId: user.id },
-                include: [{
-                    model: Capitulo,
-                    as: 'capitulo',
-                    required: true,
-                    include: [{ model: Mentoria, as: 'mentoria', required: true }]
-                }],
-                order: [['ultimaEscuta', 'DESC']] // O primeiro da lista é o que ele ouviu por último
-            });
+            if (!user) return res.status(404).json({ message: "Usuário não encontrado" });
 
-            // 2. Agrupamento e Contagem
-            const mapaMentorias = new Map();
+            const query = `
+                SELECT 
+                    m.id, 
+                    m.titulo, 
+                    m."subText", 
+                    m."fotoUrl",
+                    MAX(p."ultimaEscuta") as "data",
+                    (SELECT c2.titulo FROM capitulos c2 JOIN progresso_usuarios pu ON pu."capituloId" = c2.id WHERE c2."mentoriaId" = m.id AND pu."userId" = :userId ORDER BY pu."ultimaEscuta" DESC LIMIT 1) as "ultimoCapitulo",
+                    (SELECT pu."segundoAtual" FROM capitulos c2 JOIN progresso_usuarios pu ON pu."capituloId" = c2.id WHERE c2."mentoriaId" = m.id AND pu."userId" = :userId ORDER BY pu."ultimaEscuta" DESC LIMIT 1) as "progressoCapitulo",
+                    COUNT(DISTINCT c.id) AS "totalCapitulos",
+                    COUNT(DISTINCT CASE WHEN p.concluido = true THEN p."capituloId" END) AS "capitulosConcluidos"
+                FROM mentorias m
+                JOIN capitulos c ON c."mentoriaId" = m.id
+                JOIN progresso_usuarios p ON p."capituloId" = c.id AND p."userId" = :userId
+                GROUP BY m.id, m.titulo, m."subText", m."fotoUrl"
+                HAVING 
+                    (CASE 
+                        WHEN COUNT(DISTINCT c.id) > 0 AND COUNT(DISTINCT CASE WHEN p.concluido = true THEN p."capituloId" END) >= COUNT(DISTINCT c.id) THEN 'concluido'
+                        ELSE 'andamento'
+                    END) = :status
+                ORDER BY "data" DESC
+                LIMIT :limit OFFSET :offset
+            `;
 
-            // Precisamos saber o total de capítulos de cada mentoria.
-            // Para não fazer queries dentro de loop (lento), vamos pegar os IDs das mentorias encontradas.
-            const mentoriaIds = new Set();
-            progressos.forEach(p => {
-                if (p.capitulo?.mentoria) mentoriaIds.add(p.capitulo.mentoria.id);
-            });
+            const countQuery = `
+                SELECT COUNT(*) as total
+                FROM (
+                    SELECT m.id
+                    FROM mentorias m
+                    JOIN capitulos c ON c."mentoriaId" = m.id
+                    JOIN progresso_usuarios p ON p."capituloId" = c.id AND p."userId" = :userId
+                    GROUP BY m.id
+                    HAVING 
+                        (CASE 
+                            WHEN COUNT(DISTINCT c.id) > 0 AND COUNT(DISTINCT CASE WHEN p.concluido = true THEN p."capituloId" END) >= COUNT(DISTINCT c.id) THEN 'concluido'
+                            ELSE 'andamento'
+                        END) = :status
+                ) as subquery
+            `;
 
-            // Busca contagem total de capítulos para essas mentorias
-            const mentoriasInfos = await Mentoria.findAll({
-                where: { id: Array.from(mentoriaIds) },
-                include: [{ model: Capitulo, as: 'capitulos', attributes: ['id'] }]
-            });
+            const [data, countResult] = await Promise.all([
+                db.query(query, {
+                    replacements: { userId: user.id, status, limit: limitNum, offset },
+                    type: db.QueryTypes.SELECT
+                }),
+                db.query(countQuery, {
+                    replacements: { userId: user.id, status },
+                    type: db.QueryTypes.SELECT
+                })
+            ]);
 
-            // Cria um dicionário: ID da Mentoria -> Total de Capítulos
-            const totaisPorMentoria = {};
-            mentoriasInfos.forEach(m => {
-                totaisPorMentoria[m.id] = m.capitulos.length;
-            });
-
-            // 3. Processa o status real
-            progressos.forEach(p => {
-                const m = p.capitulo.mentoria;
-                
-                if (!mapaMentorias.has(m.id)) {
-                    // Inicializa o objeto da mentoria na primeira vez que a encontramos
-                    mapaMentorias.set(m.id, {
-                        id: m.id,
-                        titulo: m.titulo,
-                        subText: m.subText,
-                        fotoUrl: m.fotoUrl,
-                        // Como a lista está ordenada por data DESC, o primeiro registro é onde ele parou
-                        ultimoCapitulo: p.capitulo.titulo, 
-                        progressoCapitulo: p.segundoAtual,
-                        data: p.ultimaEscuta,
-                        capitulosConcluidos: new Set(), // Usamos Set para não contar o mesmo capitulo 2x
-                        totalCapitulos: totaisPorMentoria[m.id] || 0
-                    });
-                }
-
-                // Adiciona o capítulo ao Set de concluídos se for true
-                if (p.concluido) {
-                    mapaMentorias.get(m.id).capitulosConcluidos.add(p.capitulo.id);
-                }
-            });
-
-            // 4. Decide se é 'andamento' ou 'concluido'
-            const listaFinal = [];
-            
-            mapaMentorias.forEach(item => {
-                const totalConcluidos = item.capitulosConcluidos.size;
-                const totalExistentes = item.totalCapitulos;
-
-                // Regra de Ouro: Só é concluído se ouviu TODOS os capítulos
-                // Se totalExistentes for 0 (erro de cadastro), assumimos concluído para não travar
-                const isCompleto = totalExistentes > 0 && totalConcluidos >= totalExistentes;
-
-                const statusCalculado = isCompleto ? 'concluido' : 'andamento';
-
-                // Filtra pelo que o Front-end pediu na query (?status=...)
-                if (statusCalculado === status) {
-                    listaFinal.push({
-                        ...item,
-                        // Removemos o Set antes de enviar o JSON
-                        capitulosConcluidos: totalConcluidos, 
-                        status: statusCalculado
-                    });
-                }
-            });
-
-            // 5. Paginação Manual
-            const startIndex = (pageNum - 1) * limitNum;
-            const endIndex = pageNum * limitNum;
-            const dadosPaginados = listaFinal.slice(startIndex, endIndex);
+            const total = parseInt(countResult[0].total, 10);
 
             return res.status(200).json({
-                data: dadosPaginados,
+                data: data,
                 pagination: {
                     page: pageNum,
-                    total: listaFinal.length,
-                    hasMore: endIndex < listaFinal.length
+                    total: total,
+                    hasMore: offset + data.length < total
                 }
             });
 
         } catch (error) {
-            console.error("Erro biblioteca:", error);
+            console.error("Erro na biblioteca otimizada:", error);
             res.status(500).json({ error: error.message });
         }
     }
@@ -1345,18 +1496,11 @@ export const checkAuth = async (req, res, next) => {
 
     try {
         // =========================================================================
-        // 🟢 SOLUÇÃO BRANDA (PADRÃO - ULTRA RÁPIDA)
-        // O Firebase confia no token atual. Se a senha for alterada, o usuário será
-        // deslogado dos outros aparelhos em até 1 hora (quando o token vencer).
+        // 🔴 SOLUÇÃO PARANOICA (TEMPO REAL) ATIVADA
+        // O servidor verificará com o Google a CADA requisição se a senha não 
+        // foi alterada ou a conta revogada.
         // =========================================================================
-        const decodedToken = await admin.auth().verifyIdToken(token);
-
-        // =========================================================================
-        // 🔴 SOLUÇÃO PARANOICA (TEMPO REAL - MAIS LENTA)
-        // Para ativar, comente a linha acima e descomente a linha abaixo.
-        // O servidor verificará com o Google a CADA clique se a senha não foi alterada.
-        // =========================================================================
-        // const decodedToken = await admin.auth().verifyIdToken(token, true);
+        const decodedToken = await admin.auth().verifyIdToken(token, true); // 👈 O 'true' faz a mágica
         
         // Trava de E-mail Verificado
         if (decodedToken.email_verified === false && decodedToken.firebase?.sign_in_provider === 'password') {
@@ -1369,10 +1513,10 @@ export const checkAuth = async (req, res, next) => {
         req.user = decodedToken;
         next();
     } catch (error) {
-        // Se a solução "paranoica" estiver ativada e a senha tiver mudado, ele cai aqui:
+        // 👇 Agora, se a conta for banida ou senha trocada, ele cai especificamente aqui:
         if (error.code === 'auth/id-token-revoked') {
-            console.log("🚫 [BACKEND] Token revogado por alteração de senha.");
-            return res.status(401).json({ message: "Sessão expirada. Faça login novamente." });
+            console.log("🚫 [BACKEND] Token revogado por alteração de senha ou bloqueio.");
+            return res.status(401).json({ message: "Sessão expirada ou revogada. Faça login novamente." });
         }
         
         return res.status(403).json({ message: "Sessão inválida ou expirada." });
@@ -1449,6 +1593,34 @@ export const checkSubscription = async (req, res, next) => {
 
 
 =========================================
+ARQUIVO: D:\_backend-VITO\src\middlewares\xssMiddleware.js
+=========================================
+
+import sanitizeHtml from 'sanitize-html';
+
+export const xssProtect = (req, res, next) => {
+    if (req.body) {
+        // Varre tudo o que chega no corpo da requisição
+        for (let key in req.body) {
+            if (typeof req.body[key] === 'string') {
+                // Limpa a string de qualquer tag maliciosa (<script>, <iframe>, etc)
+                req.body[key] = sanitizeHtml(req.body[key], {
+                    // Permitimos apenas tags básicas de formatação de texto (útil se seu admin web tiver um editor de texto rico)
+                    allowedTags: ['b', 'i', 'em', 'strong', 'a', 'p', 'br', 'ul', 'li', 'ol'],
+                    allowedAttributes: {
+                        'a': ['href'] // Permite apenas links normais
+                    },
+                    allowedSchemes: ['http', 'https'] // Impede links do tipo javascript:alert(1)
+                });
+            }
+        }
+    }
+    next();
+};
+
+
+
+=========================================
 ARQUIVO: D:\_backend-VITO\src\models\assinatura.js
 =========================================
 
@@ -1520,6 +1692,44 @@ export default Categoria;
 
 
 =========================================
+ARQUIVO: D:\_backend-VITO\src\models\financasConfig.js
+=========================================
+
+import { DataTypes, Model } from 'sequelize';
+import db from '../config/database.js';
+
+class FinancasConfig extends Model {}
+
+FinancasConfig.init({
+    id: { 
+        type: DataTypes.INTEGER, 
+        primaryKey: true, 
+        autoIncrement: true 
+    },
+    custoServidor: { 
+        type: DataTypes.FLOAT, 
+        defaultValue: 0 
+    },
+    custoMarketing: { 
+        type: DataTypes.FLOAT, 
+        defaultValue: 0 
+    },
+    outrosCustos: { 
+        type: DataTypes.FLOAT, 
+        defaultValue: 0 
+    }
+}, {
+    sequelize: db,
+    modelName: 'FinancasConfig',
+    tableName: 'financas_config',
+    timestamps: true
+});
+
+export default FinancasConfig;
+
+
+
+=========================================
 ARQUIVO: D:\_backend-VITO\src\models\index.js
 =========================================
 
@@ -1530,6 +1740,7 @@ import Progresso from './progresso.js';
 import Assinatura from './assinatura.js';
 import UserMentoriaView from './userMentoriaView.js';
 import Categoria from './categoria.js'; 
+import FinancasConfig from './financasConfig.js';
 
 // 1. Mentoria <-> Capitulos
 Mentoria.hasMany(Capitulo, { foreignKey: 'mentoriaId', as: 'capitulos', onDelete: 'CASCADE' });
@@ -1563,7 +1774,7 @@ Categoria.belongsToMany(Mentoria, {
     foreignKey: 'categoriaId' 
 });
 
-export { User, Mentoria, Capitulo, Progresso, Assinatura, UserMentoriaView, Categoria };
+export { User, Mentoria, Capitulo, Progresso, Assinatura, UserMentoriaView, Categoria, FinancasConfig };
 
 
 
@@ -1798,21 +2009,68 @@ ARQUIVO: D:\_backend-VITO\src\routes\authRoutes.js
 import { Router } from 'express';
 import multer from 'multer';
 import AuthController from '../controllers/authController.js';
+import AdminController from '../controllers/adminController.js';
 import { checkAuth } from '../middlewares/authMiddleware.js';
+import { isAdmin } from '../middlewares/adminMiddleware.js';
 
 const router = Router();
 
-// Configuração do multer para manter a foto na memória antes de ir para o Vercel Blob
-const upload = multer({ storage: multer.memoryStorage() });
+// ==========================================
+// 🛡️ BATERIA 2: Segurança no Upload (Perfil)
+// ==========================================
+const uploadProfile = multer({ 
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 15 * 1024 * 1024, // Limite de 15MB (Aumentado para comportar RAW/HEIC)
+    },
+    fileFilter: (req, file, cb) => {
+        // Aceita formatos web e mobile nativos (Apple e Android)
+        const allowedMimes = [
+            'image/jpeg', 'image/png', 'image/webp', 'image/jpg',
+            'image/heic', 'image/heif', // Formatos Apple/Android modernos
+            'image/dng', 'image/x-adobe-dng', 'image/raw' // Formatos Crus (Alta Qualidade)
+        ];
+        
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('FORMATO_INVALIDO'));
+        }
+    }
+});
+
+// Apenas um admin logado consegue transformar o usuário de ID "X" em admin.
+router.put('/promote/:targetUserId', checkAuth, isAdmin, AuthController.promoteToAdmin);
 
 // Rota que o App chama logo após logar no Firebase (Mobile)
 router.post('/sync', checkAuth, AuthController.syncUser);
 
 // Rota para atualizar os dados e a foto de perfil
-router.put('/profile', checkAuth, upload.single('foto'), AuthController.updateProfile);
+router.put('/profile', checkAuth, uploadProfile.single('foto'), AuthController.updateProfile);
 
-// 👇 NOVA ROTA: Verifica se o e-mail existe no banco antes de redefinir a senha
+// Verifica se o e-mail existe no banco antes de redefinir a senha
 router.post('/check-email', AuthController.checkEmailExists);
+
+// Excluir dados do usuário
+router.delete('/delete', checkAuth, AuthController.deleteUser);
+
+// Rota para buscar as estatísticas do Dashboard (BI)
+// Só acessível para Admins logados.
+router.get('/dashboard', checkAuth, isAdmin, AdminController.getDashboardStats);
+router.get('/admin/financas', checkAuth, isAdmin, AdminController.getFinancas);
+router.put('/admin/financas', checkAuth, isAdmin, AdminController.updateFinancas);
+
+// 👇 Tratamento de Erros do Multer
+router.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ message: "A foto é muito pesada. O limite máximo é 15MB." });
+        }
+    } else if (err.message === 'FORMATO_INVALIDO') {
+        return res.status(400).json({ message: "Formato inválido. Envie JPG, PNG, WEBP, HEIC ou RAW." });
+    }
+    next(err);
+});
 
 export default router;
 
@@ -1825,32 +2083,55 @@ ARQUIVO: D:\_backend-VITO\src\routes\mentoriaRoutes.js
 import { Router } from 'express';
 import multer from 'multer';
 import MentoriaController from '../controllers/mentoriaController.js';
-import { checkSubscription } from '../middlewares/subscriptionMiddleware.js';
-import { isAdmin } from '../middlewares/adminMiddleware.js';
 import { checkAuth } from '../middlewares/authMiddleware.js';
+import { isAdmin } from '../middlewares/adminMiddleware.js';
 import { checkMasterKey } from '../middlewares/masterKeyMiddleware.js';
 
-
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage() });
 
+// ==========================================
+// 🛡️ BATERIA 2: Segurança no Upload (Mentorias)
+// ==========================================
+const uploadMentoria = multer({ 
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 50 * 1024 * 1024, // Limite de 50MB para áudios longos e imagens RAW
+    },
+    fileFilter: (req, file, cb) => {
+        if (file.fieldname === 'foto') {
+            const allowedImages = [
+                'image/jpeg', 'image/png', 'image/webp', 'image/jpg',
+                'image/heic', 'image/heif', 'image/dng', 'image/x-adobe-dng', 'image/raw'
+            ];
+            if (allowedImages.includes(file.mimetype)) return cb(null, true);
+            return cb(new Error('FORMATO_FOTO_INVALIDO'));
+        }
+        
+        if (file.fieldname === 'audio') {
+            // Aceita MP3, M4A, MP4, OGG, WAV e AAC (Gravadores nativos mobile)
+            const allowedAudios = [
+                'audio/mpeg', 'audio/mp4', 'audio/mp3', 'audio/x-m4a', 
+                'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/aac'
+            ];
+            if (allowedAudios.includes(file.mimetype)) return cb(null, true);
+            return cb(new Error('FORMATO_AUDIO_INVALIDO'));
+        }
+        
+        cb(new Error('CAMPO_DESCONHECIDO'));
+    }
+});
 
+// Rotas
 router.put('/capitulos/:id', checkAuth, isAdmin, MentoriaController.updateCapituloText);
-router.get('/search', MentoriaController.search); //open rota
-
-router.get('/:mentoriaId/capitulos', MentoriaController.getCapitulosByMentoria); //Rota fechada Get mentorias paginada
-
-router.put('/:id', upload.fields([{ name: 'foto' }]), MentoriaController.update); // Rota para atualizar a mentoria
-
-router.post('/', upload.fields([{ name: 'foto' }]), MentoriaController.create); // rota fechada utilizar "checkAuth, isAdmin"
-router.get('/', MentoriaController.getAll); // rota open
+router.get('/search', MentoriaController.search); 
+router.get('/:mentoriaId/capitulos', MentoriaController.getCapitulosByMentoria); 
+router.put('/:id', checkAuth, isAdmin, uploadMentoria.fields([{ name: 'foto' }]), MentoriaController.update); 
+router.post('/', checkAuth, isAdmin, uploadMentoria.fields([{ name: 'foto' }]), MentoriaController.create); 
+router.get('/', MentoriaController.getAll); 
 router.get('/categorias/todas', MentoriaController.getExistingCategories);
-router.get('/mentoriaBase/:id', MentoriaController.getById); //rota fechada utilizar "checkSubscription"
-router.post('/:mentoriaId/capitulos', upload.fields([{ name: 'foto' }, { name: 'audio' }]), MentoriaController.addCapitulo);//rota fechada utilizar " checkAuth, isAdmin"
-
-// Altere a rota de categorias para usar o controller
+router.get('/mentoriaBase/:id', MentoriaController.getById); 
+router.post('/:mentoriaId/capitulos', checkAuth, isAdmin, uploadMentoria.fields([{ name: 'foto' }, { name: 'audio' }]), MentoriaController.addCapitulo);
 router.get('/categorias', MentoriaController.listAllCategories);
-
 router.delete('/full-delete/:id', checkMasterKey, MentoriaController.deleteFull);
 
 router.delete('/capitulos/:id', checkAuth, isAdmin, async (req, res) => {
@@ -1861,6 +2142,20 @@ router.delete('/capitulos/:id', checkAuth, isAdmin, async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+// 👇 Tratamento de Erros de Upload
+router.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ message: "O arquivo excedeu o limite máximo de 50MB." });
+        }
+    } else if (err.message === 'FORMATO_FOTO_INVALIDO') {
+        return res.status(400).json({ message: "Formato de foto inválido (Use JPG, PNG, WEBP, HEIC, RAW)." });
+    } else if (err.message === 'FORMATO_AUDIO_INVALIDO') {
+        return res.status(400).json({ message: "Formato de áudio inválido (Use MP3, M4A, OGG, WAV, AAC)." });
+    }
+    next(err);
 });
 
 export default router;
@@ -1910,25 +2205,64 @@ ARQUIVO: D:\_backend-VITO\src\routes\questaoRoutes.js
 import { Router } from 'express';
 import multer from 'multer';
 import QuestaoController from '../controllers/questaoController.js';
+import { checkAuth } from '../middlewares/authMiddleware.js';
+import { isAdmin } from '../middlewares/adminMiddleware.js';
 
 const router = Router();
 
-// Configura o multer para manter o arquivo na memória temporariamente antes de enviar ao Supabase
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+// ==========================================
+// 🛡️ BATERIA 2: Segurança no Upload (Questões)
+// ==========================================
+const uploadQuestao = multer({ 
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 50 * 1024 * 1024, // Limite de 50MB
+    },
+    fileFilter: (req, file, cb) => {
+        if (file.fieldname === 'foto') {
+            const allowedImages = [
+                'image/jpeg', 'image/png', 'image/webp', 'image/jpg',
+                'image/heic', 'image/heif', 'image/dng', 'image/x-adobe-dng', 'image/raw'
+            ];
+            if (allowedImages.includes(file.mimetype)) return cb(null, true);
+            return cb(new Error('FORMATO_FOTO_INVALIDO'));
+        }
+        
+        if (file.fieldname === 'audio') {
+            const allowedAudios = [
+                'audio/mpeg', 'audio/mp4', 'audio/mp3', 'audio/x-m4a', 
+                'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/aac'
+            ];
+            if (allowedAudios.includes(file.mimetype)) return cb(null, true);
+            return cb(new Error('FORMATO_AUDIO_INVALIDO'));
+        }
+        
+        cb(null, true);
+    }
+});
 
-// Define os campos que a rota aceita
-const uploadFields = upload.fields([
+const uploadFields = uploadQuestao.fields([
     { name: 'foto', maxCount: 1 },
     { name: 'audio', maxCount: 1 }
 ]);
 
-// ROTA POST: Criar questão
-// O multer processa os arquivos e o Controller salva tudo
-router.post('/', uploadFields, QuestaoController.createQuestao);
+// Rotas (Protegidas)
+router.post('/', checkAuth, isAdmin, uploadFields, QuestaoController.createQuestao);
+router.get('/:id', checkAuth, QuestaoController.getQuestaoById);
 
-// ROTA GET: Buscar por ID
-router.get('/:id', QuestaoController.getQuestaoById);
+// 👇 Tratamento de Erros
+router.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ message: "O arquivo excedeu o limite máximo de 50MB." });
+        }
+    } else if (err.message === 'FORMATO_FOTO_INVALIDO') {
+        return res.status(400).json({ message: "Formato de foto inválido (Use JPG, PNG, WEBP, HEIC, RAW)." });
+    } else if (err.message === 'FORMATO_AUDIO_INVALIDO') {
+        return res.status(400).json({ message: "Formato de áudio inválido (Use MP3, M4A, OGG, WAV, AAC)." });
+    }
+    next(err);
+});
 
 export default router;
 
@@ -1978,6 +2312,12 @@ ARQUIVO: D:\_backend-VITO\src\app.js
 
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+
+// 👇 Importando o nosso novo middleware de proteção XSS
+import { xssProtect } from './middlewares/xssMiddleware.js';
+
 import routesTeste from './routes/testeRoutes.js';
 import questao from './routes/questaoRoutes.js'
 import Mentoria from './routes/mentoriaRoutes.js'
@@ -1994,23 +2334,52 @@ import teste from './routes/testeRoutes.js';
 
 const app = express();
 
-// app.use((req, res, next) => {
-//   console.log(`[${new Date().toLocaleTimeString()}] 📥 Chamada recebida: ${req.method} ${req.url}`);
-//   console.log(`   Origem: ${req.headers['user-agent']}`);
-//   next();
-// });
+// Diz ao Express para confiar no Proxy (Ngrok/Vercel/Render)
+app.set('trust proxy', 1);
 
-app.use(cors());
+// ==========================================
+// 🛡️ MIDDLEWARES DE SEGURANÇA
+// ==========================================
+
+// 1. Helmet: Adiciona proteções HTTP e esconde o Express
+app.use(helmet());
+
+// 2. Rate Limiting: Trava de força bruta
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 300,
+  message: { error: "Muitas requisições deste IP, tente novamente mais tarde." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(apiLimiter); 
+
+// 3. CORS: Permitir apenas origens seguras
+const corsOptions = {
+  origin: process.env.WEB_ADMIN_URL || '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key']
+};
+app.use(cors(corsOptions));
+
+// Transforma o corpo da requisição em JSON
 app.use(express.json());
+
+// 👇 4. XSS Protect: Nossa trava personalizada e moderna
+app.use(xssProtect);
+
+// ==========================================
+
+// Rota de Webhook
+app.post('/webhooks/revenuecat', WebhookController.handleRevenueCat);
+
 app.use(routesTeste);
 app.use("/auth", authRoutes);
 app.use("/", teste);
-app.use("/questoes",checkAuth, questao); // Precisa do "checkSubscription"
-app.use("/mentorias", Mentoria) // Precisa do "checkSubscription" dentro do seu route.
-app.use("/progresso", progressoRoutes); // Precisa do "checkSubscription" 
-app.use("/recomendacoes", recomendacaoRoutes); // <-- NOVO
-app.post('/webhooks/revenuecat', WebhookController.handleRevenueCat);
-
+app.use("/questoes", checkAuth, questao); 
+app.use("/mentorias", Mentoria); 
+app.use("/progresso", progressoRoutes); 
+app.use("/recomendacoes", recomendacaoRoutes); 
 
 export default app;
 
@@ -2026,8 +2395,8 @@ ARQUIVO: D:\_backend-VITO\package.json
   "main": "index.js",
   "type": "module",
   "scripts": {
-  "start": "node server.js",
-  "build": "npm install",
+    "start": "node server.js",
+    "build": "npm install",
     "dev": "nodemon server.js",
     "test:routes": "bash test.sh",
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -2042,13 +2411,16 @@ ARQUIVO: D:\_backend-VITO\package.json
     "cors": "^2.8.6",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.3.1",
     "firebase-admin": "^12.7.0",
+    "helmet": "^8.1.0",
     "multer": "^2.0.2",
     "music-metadata": "^11.11.2",
     "mysql2": "^3.16.2",
     "node-cron": "^4.2.1",
     "pg": "^8.18.0",
     "pg-hstore": "^2.3.4",
+    "sanitize-html": "^2.17.2",
     "sequelize": "^6.37.7"
   },
   "devDependencies": {

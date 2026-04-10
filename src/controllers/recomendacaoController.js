@@ -10,6 +10,11 @@ export default class RecomendacaoController {
             const { mentoriaId } = req.params;
             const uid = req.user.uid; 
 
+            // 👇 Ignora o registro se for visitante para não crachar o BD
+            if (uid === 'guest') {
+                return res.status(200).json({ success: true, message: "View não registrada para visitante." });
+            }
+
             const user = await User.findOne({ where: { firebaseUid: uid } });
             if (!user) return res.status(404).json({ message: "Usuário não encontrado." });
 
@@ -31,6 +36,12 @@ export default class RecomendacaoController {
     static async recomendacoesPorPlay(req, res) {
     console.log("👉 [ALG-PLAY] Iniciando via N:N...");
     try {
+        // 👇 Proteção para visitante
+        if (req.user.uid === 'guest') {
+            console.log("   [ALG-PLAY] Visitante: Retornando vazio.");
+            return res.status(200).json({ titulo: '', data: [] });
+        }
+
         const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
         if (!user) return res.status(404).json({ message: "User not found" });
 
@@ -111,6 +122,12 @@ export default class RecomendacaoController {
     static async recomendacoesPorView(req, res) {
         console.log("👉 [ALG-VIEW] Iniciando via N:N...");
         try {
+            // 👇 Proteção para visitante
+            if (req.user.uid === 'guest') {
+                console.log("   [ALG-VIEW] Visitante: Retornando vazio.");
+                return res.status(200).json({ titulo: '', data: [] });
+            }
+
             const user = await User.findOne({ where: { firebaseUid: req.user.uid } });
             
             const ultimaView = await UserMentoriaView.findOne({

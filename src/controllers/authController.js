@@ -10,6 +10,10 @@ export default class AuthController {
     static async syncUser(req, res) {
         try {
             const { uid, email, name, picture, firebase } = req.user;
+
+            if (uid === 'guest') {
+                return res.status(403).json({ message: "Visitantes não podem sincronizar dados." });
+            }
             const providerId = firebase.sign_in_provider;
 
             // Verifica se a Master Key foi enviada no Header de uma requisição específica

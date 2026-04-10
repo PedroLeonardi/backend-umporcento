@@ -6,14 +6,14 @@ import admin from 'firebase-admin';
 const sanitize = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_").replace(/[^a-zA-Z0-9._-]/g, "");
 
 export default class AuthController {
-    
+
     static async syncUser(req, res) {
         try {
             const { uid, email, name, picture, firebase } = req.user;
-            const providerId = firebase.sign_in_provider; 
-            
+            const providerId = firebase.sign_in_provider;
+
             // Verifica se a Master Key foi enviada no Header de uma requisição específica
-            const adminKey = req.headers['x-admin-key']; 
+            const adminKey = req.headers['x-admin-key'];
             const isMaster = adminKey === process.env.ADMIN_MASTER_KEY;
 
             const [user, created] = await User.findOrCreate({
@@ -23,9 +23,20 @@ export default class AuthController {
                     email: email,
                     foto: picture || null,
                     provedor: providerId,
-                    role: isMaster ? 'admin' : 'user' // Define como admin se a chave bater
+                    role: isMaster ? 'admin' : 'user'
                 }
             });
+
+            // Lógica de Trial de 3 dias para novos usuários
+            if (created) {
+                const trialDays = 3;
+                const expiration = new Date();
+                expiration.setDate(expiration.getDate() + trialDays);
+
+                user.trialExpiration = expiration;
+                await user.save();
+                console.log(`🎁 [TRIAL] 3 dias concedidos para ${user.email}`);
+            }
 
             // Se o usuário já existia mas você enviou a chave agora, ele vira admin
             if (!created && isMaster && user.role !== 'admin') {
@@ -33,9 +44,18 @@ export default class AuthController {
                 await user.save();
             }
 
+            // AQUI ESTÁ A ALTERAÇÃO: Enviando o trialExpiration e isPremium no JSON
             return res.status(200).json({
                 message: isMaster ? "Acesso administrativo sincronizado" : "Usuário sincronizado",
-                user
+                user: {
+                    id: user.id,
+                    nome: user.nome,
+                    email: user.email,
+                    role: user.role,
+                    foto: user.foto,
+                    isPremium: user.isPremium, // Importante para o front saber se é Pro
+                    trialExpiration: user.trialExpiration // <--- CAMPO ADICIONADO AQUI
+                }
             });
         } catch (error) {
             console.error("Erro na sincronia:", error);
@@ -45,9 +65,9 @@ export default class AuthController {
 
     static async updateProfile(req, res) {
         try {
-            const { uid } = req.user; // Funciona com Firebase ou com o seu bypass dev-vito
+            const { uid } = req.user;
             const { nome } = req.body;
-            const file = req.file; // Arquivo capturado pelo multer
+            const file = req.file;
 
             const user = await User.findOne({ where: { firebaseUid: uid } });
 
@@ -55,27 +75,34 @@ export default class AuthController {
                 return res.status(404).json({ message: "Usuário não encontrado." });
             }
 
-            // Atualiza o nome se foi enviado
             if (nome) user.nome = nome;
 
-            // Faz o upload da nova foto de perfil se o arquivo foi enviado
             if (file) {
                 const path = `usuarios/perfil/${Date.now()}_${sanitize(file.originalname)}`;
                 const blobOptions = { access: 'public', addRandomSuffix: false };
-                
-                const blob = await put(path, file.buffer, { 
-                    ...blobOptions, 
-                    contentType: file.mimetype 
+
+                const blob = await put(path, file.buffer, {
+                    ...blobOptions,
+                    contentType: file.mimetype
                 });
-                
-                user.foto = blob.url; // Salva a URL gerada pelo Vercel Blob
+
+                user.foto = blob.url;
             }
 
             await user.save();
 
+            // TAMBÉM ATUALIZADO AQUI para manter a consistência no retorno do perfil
             return res.status(200).json({
                 message: "Perfil atualizado com sucesso",
-                user
+                user: {
+                    id: user.id,
+                    nome: user.nome,
+                    email: user.email,
+                    role: user.role,
+                    foto: user.foto,
+                    isPremium: user.isPremium,
+                    trialExpiration: user.trialExpiration // <--- CAMPO ADICIONADO AQUI
+                }
             });
 
         } catch (error) {
@@ -87,12 +114,12 @@ export default class AuthController {
     static async sendPasswordReset(req, res) {
         try {
             const { email } = req.user; // Pega o e-mail do token autenticado
-            
+
             // O Firebase Admin gera um link, mas o jeito mais seguro para o usuário 
             // é usar o método do Client SDK (Mobile). 
             // Mas via Admin, podemos gerar o link:
             const link = await admin.auth().generatePasswordResetLink(email);
-            
+
             // Aqui você poderia enviar um e-mail via SendGrid/Nodemailer
             // Por simplicidade e segurança, retornamos sucesso para o Mobile disparar o método nativo.
             return res.status(200).json({ message: "Link de redefinição gerado", link });
@@ -104,7 +131,7 @@ export default class AuthController {
     static async checkEmailExists(req, res) {
         try {
             const { email } = req.body;
-            
+
             if (!email) {
                 return res.status(400).json({ message: "E-mail não fornecido." });
             }
@@ -118,9 +145,9 @@ export default class AuthController {
 
             // Impede redefinição de quem loga só pelo Google
             if (user.provedor === 'google.com') {
-                return res.status(400).json({ 
-                    exists: true, 
-                    message: "Esta conta usa login do Google. Altere sua senha diretamente no Google." 
+                return res.status(400).json({
+                    exists: true,
+                    message: "Esta conta usa login do Google. Altere sua senha diretamente no Google."
                 });
             }
 
@@ -166,8 +193,8 @@ export default class AuthController {
             userToPromote.role = 'admin';
             await userToPromote.save();
 
-            return res.status(200).json({ 
-                message: `${userToPromote.nome} agora é um administrador.` 
+            return res.status(200).json({
+                message: `${userToPromote.nome} agora é um administrador.`
             });
 
         } catch (error) {

@@ -27,6 +27,11 @@ const User = db.define('User', {
     isPremium: {
         type: DataTypes.BOOLEAN,
         defaultValue: false
+    },
+    trialExpiration: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        comment: "Data limite do período de degustação grátis"
     }
 }, { 
     tableName: 'usuarios',

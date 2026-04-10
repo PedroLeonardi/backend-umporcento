@@ -257,28 +257,38 @@ export default class MentoriaController {
         }
     }
 
-    static async getById(req, res) {
-    const { id } = req.params;
-    const mentoria = await Mentoria.findByPk(id, {
-        include: [
-            { model: Capitulo, as: 'capitulos' },
-            { 
-                model: Categoria, 
-                as: 'categorias', 
-                through: { attributes: [] } // Isso remove os dados da tabela intermediária do JSON
+static async getById(req, res) {
+        try {
+            const { id } = req.params;
+            const mentoria = await Mentoria.findByPk(id, {
+                include: [
+                    { model: Capitulo, as: 'capitulos' },
+                    { 
+                        model: Categoria, 
+                        as: 'categorias', 
+                        through: { attributes: [] } 
+                    }
+                ],
+                order: [[ { model: Capitulo, as: 'capitulos' }, 'ordem', 'ASC' ]]
+            });
+
+            // 👇 Se não achar a mentoria, devolve um erro JSON bonitinho
+            if (!mentoria) {
+                return res.status(404).json({ message: "Mentoria não encontrada." });
             }
-        ],
-        order: [[ { model: Capitulo, as: 'capitulos' }, 'ordem', 'ASC' ]]
-    });
 
-    // IMPORTANTE: O Frontend espera um array de strings ['geral', 'vendas']
-    // Mas o Sequelize retorna [{nome: 'geral'}, {nome: 'vendas'}]
-    // Vamos formatar antes de enviar:
-    const mentoriaFormatada = mentoria.toJSON();
-    mentoriaFormatada.categorias = mentoria.categorias.map(c => c.nome);
+            const mentoriaFormatada = mentoria.toJSON();
+            // Evita crash se a categoria vier nula
+            mentoriaFormatada.categorias = mentoria.categorias ? mentoria.categorias.map(c => c.nome) : [];
 
-    res.json(mentoriaFormatada);
-}
+            return res.status(200).json(mentoriaFormatada);
+            
+        } catch (error) {
+            console.error("🔴 Erro fatal na rota getById:", error);
+            // Se o banco cair, devolve JSON em vez da maldita página HTML
+            return res.status(500).json({ error: "Erro interno do servidor." });
+        }
+    }
 static async search(req, res) {
     try {
         const { titulo, categoria, includeInactive, page = 1, limit = 10 } = req.query;

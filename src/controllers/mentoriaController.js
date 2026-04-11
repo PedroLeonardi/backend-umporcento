@@ -8,16 +8,15 @@ const sanitize = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
 
 export default class MentoriaController {
 
-    // Função auxiliar para garantir que o JSON de saída seja sempre estável
-    static formatMentoria(mentoriaInstance) {
-        if (!mentoriaInstance) return null;
-        const plain = mentoriaInstance.get({ plain: true });
-        
-        // Garante que categorias seja sempre um array de strings
-        plain.categorias = mentoriaInstance.categorias 
-            ? mentoriaInstance.categorias.map(c => typeof c === 'string' ? c : c.nome) 
-            : [];
-            
+    // Função interna para padronizar o JSON (Não é uma rota)
+    static formatResponse(instance) {
+        if (!instance) return null;
+        const plain = instance.get({ plain: true });
+        if (plain.categorias && Array.isArray(plain.categorias)) {
+            plain.categorias = plain.categorias.map(cat => typeof cat === 'string' ? cat : (cat.nome || ''));
+        } else {
+            plain.categorias = [];
+        }
         return plain;
     }
 
@@ -26,30 +25,19 @@ export default class MentoriaController {
             const { titulo, subText, textoDescritivo, categorias } = req.body;
             const files = req.files;
             let fotoUrl = null;
-            const blobOptions = { access: 'public', addRandomSuffix: false };
-
             if (files?.foto?.[0]) {
                 const file = files.foto[0];
-                const path = `mentorias/capas/${Date.now()}_${sanitize(file.originalname)}`;
-                const blob = await put(path, file.buffer, { ...blobOptions, contentType: file.mimetype });
-                fotoUrl = blob.url;
+                fotoUrl = (await put(`mentorias/capas/${Date.now()}_${sanitize(file.originalname)}`, file.buffer, { access: 'public', contentType: file.mimetype })).url;
             }
-
             const novaMentoria = await Mentoria.create({ titulo, subText, textoDescritivo, fotoUrl });
-
             if (categorias) {
-                const listaCategorias = typeof categorias === 'string' ? JSON.parse(categorias) : categorias;
-                const catPromises = listaCategorias.map(nome => 
-                    Categoria.findOrCreate({ where: { nome: nome.toLowerCase().trim() } })
-                );
+                const lista = typeof categorias === 'string' ? JSON.parse(categorias) : categorias;
+                const catPromises = lista.map(nome => Categoria.findOrCreate({ where: { nome: nome.toLowerCase().trim() } }));
                 const catsResolvidas = await Promise.all(catPromises);
                 await novaMentoria.setCategorias(catsResolvidas.map(c => c[0].id));
             }
-
             res.status(201).json(novaMentoria);
-        } catch (error) {
-            res.status(500).json({ error: error.message });
-        }
+        } catch (error) { res.status(500).json({ error: error.message }); }
     }
 
     static async getAll(req, res) {
@@ -57,87 +45,53 @@ export default class MentoriaController {
             const page = parseInt(req.query.page) || 1;
             const limit = parseInt(req.query.limit) || 10;
             const offset = (page - 1) * limit;
-
             const { count, rows } = await Mentoria.findAndCountAll({
                 where: { status: 'ativo' },
-                limit,
-                offset,
-                order: [['createdAt', 'DESC']],
+                limit, offset, order: [['createdAt', 'DESC']],
                 include: [{ model: Categoria, as: 'categorias', through: { attributes: [] } }],
                 distinct: true
             });
-
-            const data = rows.map(m => MentoriaController.formatMentoria(m));
-
-            res.status(200).json({
-                totalItens: count,
-                totalPages: Math.ceil(count / limit),
-                currentPage: page,
-                data
-            });
-        } catch (error) {
-            res.status(500).json({ error: error.message });
-        }
+            const data = rows.map(m => MentoriaController.formatResponse(m));
+            res.status(200).json({ totalItens: count, totalPages: Math.ceil(count / limit), currentPage: page, data });
+        } catch (error) { res.status(500).json({ error: error.message }); }
     }
 
     static async getById(req, res) {
         try {
             const { id } = req.params;
-            if (!id || id === 'undefined') return res.status(400).json({ error: "ID inválido" });
-
             const mentoria = await Mentoria.findByPk(id, {
-                include: [
-                    { model: Capitulo, as: 'capitulos' },
-                    { model: Categoria, as: 'categorias', through: { attributes: [] } }
-                ],
+                include: [{ model: Capitulo, as: 'capitulos' }, { model: Categoria, as: 'categorias', through: { attributes: [] } }],
                 order: [[ { model: Capitulo, as: 'capitulos' }, 'ordem', 'ASC' ]]
             });
-
-            if (!mentoria) return res.status(404).json({ error: "Mentoria não encontrada" });
-
-            res.status(200).json(MentoriaController.formatMentoria(mentoria));
-        } catch (error) {
-            console.error("ERRO GET_BY_ID:", error);
-            res.status(500).json({ error: "Erro interno ao buscar mentoria" });
-        }
+            if (!mentoria) return res.status(404).json({ error: "Não encontrada" });
+            res.status(200).json(MentoriaController.formatResponse(mentoria));
+        } catch (error) { res.status(500).json({ error: "Erro interno" }); }
     }
 
     static async search(req, res) {
         try {
             const { titulo, categoria, includeInactive, page = 1, limit = 10 } = req.query;
             const offset = (parseInt(page) - 1) * parseInt(limit);
-            
             const whereClause = {};
             if (includeInactive !== 'true') whereClause.status = 'ativo';
-
             if (titulo) {
-                whereClause[Op.and] = [
-                    db.where(db.fn('unaccent', db.col('Mentoria.titulo')), { 
-                        [Op.iLike]: db.fn('unaccent', `%${titulo}%`) 
-                    })
-                ];
+                whereClause[Op.and] = [db.where(db.fn('unaccent', db.col('Mentoria.titulo')), { [Op.iLike]: db.fn('unaccent', `%${titulo}%`) })];
             }
-
             const { count, rows } = await Mentoria.findAndCountAll({
-                where: whereClause,
-                limit: parseInt(limit),
-                offset: offset,
-                order: [['createdAt', 'DESC']],
-                distinct: true, 
-                include: [{
-                    model: Categoria,
-                    as: 'categorias',
-                    where: categoria ? { nome: { [Op.iLike]: categoria.trim() } } : undefined,
-                    required: !!categoria,
-                    through: { attributes: [] }
-                }]
+                where: whereClause, limit: parseInt(limit), offset, order: [['createdAt', 'DESC']], distinct: true,
+                include: [{ model: Categoria, as: 'categorias', where: categoria ? { nome: { [Op.iLike]: categoria.trim() } } : undefined, required: !!categoria, through: { attributes: [] } }]
             });
-
-            const data = rows.map(m => MentoriaController.formatMentoria(m));
+            const data = rows.map(m => MentoriaController.formatResponse(m));
             res.status(200).json({ totalItens: count, data });
-        } catch (error) {
-            res.status(500).json({ error: error.message });
-        }
+        } catch (error) { res.status(500).json({ error: error.message }); }
+    }
+
+    static async getCapitulosByMentoria(req, res) {
+        try {
+            const { mentoriaId } = req.params;
+            const rows = await Capitulo.findAll({ where: { mentoriaId }, order: [['ordem', 'ASC']] });
+            res.status(200).json({ data: rows });
+        } catch (error) { res.status(500).json({ error: error.message }); }
     }
 
     static async addCapitulo(req, res) {
@@ -145,92 +99,64 @@ export default class MentoriaController {
             const { mentoriaId } = req.params;
             const { titulo, textoConteudo, usarFotoPrincipal, ordem } = req.body;
             const files = req.files;
-
             const mentoria = await Mentoria.findByPk(mentoriaId);
             if (!mentoria) return res.status(404).json({ message: "Mentoria não encontrada" });
-
-            let fotoUrlCapitulo = null;
-            let audioUrl = null;
+            let audioUrl = "";
             let duracaoSegundos = 0;
-
             if (files?.audio?.[0]) {
                 const audioFile = files.audio[0];
                 try {
                     const metadata = await mm.parseBuffer(audioFile.buffer, audioFile.mimetype, { duration: true });
-                    duracaoSegundos = metadata.format.duration ? Math.round(metadata.format.duration) : 0;
+                    duracaoSegundos = Math.round(metadata.format.duration || 0);
                 } catch (e) { duracaoSegundos = 0; }
-
-                const blob = await put(`mentorias/capitulos/audios/${Date.now()}_${sanitize(audioFile.originalname)}`, audioFile.buffer, { 
-                    access: 'public', contentType: audioFile.mimetype 
-                });
-                audioUrl = blob.url;
+                audioUrl = (await put(`mentorias/capitulos/audios/${Date.now()}_${sanitize(audioFile.originalname)}`, audioFile.buffer, { access: 'public', contentType: audioFile.mimetype })).url;
             }
-
-            if (usarFotoPrincipal === 'true' || usarFotoPrincipal === true) {
-                fotoUrlCapitulo = mentoria.fotoUrl;
-            } else if (files?.foto?.[0]) {
-                const blob = await put(`mentorias/capitulos/fotos/${Date.now()}_${sanitize(files.foto[0].originalname)}`, files.foto[0].buffer, { access: 'public' });
-                fotoUrlCapitulo = blob.url;
-            }
-
             const novoCapitulo = await Capitulo.create({
-                titulo, textoConteudo, fotoUrl: fotoUrlCapitulo, audioUrl,
-                ordem: parseInt(ordem) || 0, duracaoSegundos, mentoriaId: parseInt(mentoriaId)
+                titulo, textoConteudo, audioUrl, ordem: parseInt(ordem) || 0, duracaoSegundos, mentoriaId: parseInt(mentoriaId),
+                fotoUrl: (usarFotoPrincipal === 'true') ? mentoria.fotoUrl : null
             });
-
             res.status(201).json(novoCapitulo);
-        } catch (error) {
-            res.status(500).json({ error: error.message });
-        }
+        } catch (error) { res.status(500).json({ error: error.message }); }
     }
 
     static async update(req, res) {
         try {
             const { id } = req.params;
-            const { titulo, subText, textoDescritivo, categorias, status } = req.body;
-            const files = req.files;
-
             const mentoria = await Mentoria.findByPk(id);
-            if (!mentoria) return res.status(404).json({ message: "Mentoria não encontrada" });
-
-            let fotoUrl = mentoria.fotoUrl;
-            if (files?.foto?.[0]) {
-                const blob = await put(`mentorias/capas/${Date.now()}_${sanitize(files.foto[0].originalname)}`, files.foto[0].buffer, { access: 'public' });
-                fotoUrl = blob.url;
-            }
-
-            await mentoria.update({ titulo, subText, textoDescritivo, fotoUrl, status });
-
-            if (categorias) {
-                const lista = typeof categorias === 'string' ? JSON.parse(categorias) : categorias;
-                const catPromises = lista.map(nome => Categoria.findOrCreate({ where: { nome: nome.toLowerCase().trim() } }));
-                const catsResolvidas = await Promise.all(catPromises);
-                await mentoria.setCategorias(catsResolvidas.map(c => c[0].id));
-            }
-
-            res.status(200).json({ message: "Atualizado!", data: mentoria });
-        } catch (error) {
-            res.status(500).json({ error: error.message });
-        }
+            if (!mentoria) return res.status(404).json({ message: "Não encontrada" });
+            await mentoria.update(req.body);
+            res.status(200).json({ message: "Atualizado!" });
+        } catch (error) { res.status(500).json({ error: error.message }); }
     }
 
-    static async deleteFull(req, res) {
+    static async updateCapituloText(req, res) {
         try {
-            const mentoria = await Mentoria.findByPk(req.params.id, { include: [{ model: Capitulo, as: 'capitulos' }] });
-            if (!mentoria) return res.status(404).json({ message: "Mentoria não encontrada." });
-            const urls = [mentoria.fotoUrl, ...mentoria.capitulos.map(c => c.audioUrl), ...mentoria.capitulos.map(c => c.fotoUrl)].filter(u => u && u !== mentoria.fotoUrl);
-            await Promise.allSettled(urls.map(url => del(url)));
-            await mentoria.destroy();
-            res.status(200).json({ message: "Excluído com sucesso" });
+            const capitulo = await Capitulo.findByPk(req.params.id);
+            if (!capitulo) return res.status(404).json({ message: "Não encontrado" });
+            await capitulo.update(req.body);
+            res.status(200).json({ message: "Atualizado!" });
         } catch (error) { res.status(500).json({ error: error.message }); }
     }
 
     static async listAllCategories(req, res) {
         try {
-            const { nome } = req.query;
-            const whereClause = nome ? { nome: { [Op.iLike]: `%${nome}%` } } : {};
-            const categorias = await Categoria.findAll({ where: whereClause, attributes: ['id', 'nome'], order: [['nome', 'ASC']] });
+            const categorias = await Categoria.findAll({ order: [['nome', 'ASC']] });
             res.status(200).json(categorias);
+        } catch (error) { res.status(500).json({ error: error.message }); }
+    }
+
+    static async getExistingCategories(req, res) {
+        try {
+            const results = await db.query(`SELECT DISTINCT unnest(categorias) as categoria FROM mentorias`, { type: db.QueryTypes.SELECT });
+            res.status(200).json(results.map(r => r.categoria));
+        } catch (error) { res.status(500).json({ error: error.message }); }
+    }
+
+    static async deleteFull(req, res) {
+        try {
+            const mentoria = await Mentoria.findByPk(req.params.id);
+            if (mentoria) await mentoria.destroy();
+            res.status(200).json({ message: "Excluído" });
         } catch (error) { res.status(500).json({ error: error.message }); }
     }
 }

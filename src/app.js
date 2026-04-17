@@ -6,6 +6,8 @@ import rateLimit from 'express-rate-limit';
 // 👇 Importando o nosso novo middleware de proteção XSS
 import { xssProtect } from './middlewares/xssMiddleware.js';
 
+
+
 import routesTeste from './routes/testeRoutes.js';
 import questao from './routes/questaoRoutes.js'
 import Mentoria from './routes/mentoriaRoutes.js'

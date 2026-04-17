@@ -16,7 +16,6 @@ export default class AuthController {
             }
             const providerId = firebase.sign_in_provider;
 
-            // Verifica se a Master Key foi enviada no Header de uma requisição específica
             const adminKey = req.headers['x-admin-key'];
             const isMaster = adminKey === process.env.ADMIN_MASTER_KEY;
 
@@ -31,7 +30,6 @@ export default class AuthController {
                 }
             });
 
-            // Lógica de Trial de 3 dias para novos usuários
             if (created) {
                 const trialDays = 3;
                 const expiration = new Date();
@@ -42,13 +40,11 @@ export default class AuthController {
                 console.log(`🎁 [TRIAL] 3 dias concedidos para ${user.email}`);
             }
 
-            // Se o usuário já existia mas você enviou a chave agora, ele vira admin
             if (!created && isMaster && user.role !== 'admin') {
                 user.role = 'admin';
                 await user.save();
             }
 
-            // AQUI ESTÁ A ALTERAÇÃO: Enviando o trialExpiration e isPremium no JSON
             return res.status(200).json({
                 message: isMaster ? "Acesso administrativo sincronizado" : "Usuário sincronizado",
                 user: {
@@ -57,8 +53,9 @@ export default class AuthController {
                     email: user.email,
                     role: user.role,
                     foto: user.foto,
-                    isPremium: user.isPremium, // Importante para o front saber se é Pro
-                    trialExpiration: user.trialExpiration // <--- CAMPO ADICIONADO AQUI
+                    // 👇 A MÁGICA: O Front-end acha que o Admin é premium!
+                    isPremium: user.isPremium || user.role === 'admin', 
+                    trialExpiration: user.trialExpiration 
                 }
             });
         } catch (error) {
@@ -95,7 +92,6 @@ export default class AuthController {
 
             await user.save();
 
-            // TAMBÉM ATUALIZADO AQUI para manter a consistência no retorno do perfil
             return res.status(200).json({
                 message: "Perfil atualizado com sucesso",
                 user: {
@@ -104,8 +100,9 @@ export default class AuthController {
                     email: user.email,
                     role: user.role,
                     foto: user.foto,
-                    isPremium: user.isPremium,
-                    trialExpiration: user.trialExpiration // <--- CAMPO ADICIONADO AQUI
+                    // 👇 Aplicado aqui também para manter consistência
+                    isPremium: user.isPremium || user.role === 'admin',
+                    trialExpiration: user.trialExpiration 
                 }
             });
 
@@ -117,15 +114,8 @@ export default class AuthController {
 
     static async sendPasswordReset(req, res) {
         try {
-            const { email } = req.user; // Pega o e-mail do token autenticado
-
-            // O Firebase Admin gera um link, mas o jeito mais seguro para o usuário 
-            // é usar o método do Client SDK (Mobile). 
-            // Mas via Admin, podemos gerar o link:
+            const { email } = req.user; 
             const link = await admin.auth().generatePasswordResetLink(email);
-
-            // Aqui você poderia enviar um e-mail via SendGrid/Nodemailer
-            // Por simplicidade e segurança, retornamos sucesso para o Mobile disparar o método nativo.
             return res.status(200).json({ message: "Link de redefinição gerado", link });
         } catch (error) {
             return res.status(500).json({ error: "Erro ao solicitar redefinição" });
@@ -140,14 +130,12 @@ export default class AuthController {
                 return res.status(400).json({ message: "E-mail não fornecido." });
             }
 
-            // Verifica no banco Neon se o usuário existe
             const user = await User.findOne({ where: { email } });
 
             if (!user) {
                 return res.status(404).json({ exists: false, message: "E-mail não encontrado no sistema." });
             }
 
-            // Impede redefinição de quem loga só pelo Google
             if (user.provedor === 'google.com') {
                 return res.status(400).json({
                     exists: true,
@@ -155,7 +143,6 @@ export default class AuthController {
                 });
             }
 
-            // Retorna um JSON bonitinho confirmando que está tudo certo
             return res.status(200).json({ exists: true });
         } catch (error) {
             console.error("Erro ao checar e-mail:", error);
@@ -163,10 +150,9 @@ export default class AuthController {
         }
     }
 
-    // 👇 NOVA FUNÇÃO AQUI: Responsável por apagar os dados do usuário para a LGPD
     static async deleteUser(req, res) {
         try {
-            const { uid } = req.user; // Vem do token do Firebase validado pelo middleware
+            const { uid } = req.user; 
 
             const user = await User.findOne({ where: { firebaseUid: uid } });
 
@@ -174,7 +160,6 @@ export default class AuthController {
                 return res.status(404).json({ message: "Usuário não encontrado no banco de dados." });
             }
 
-            // O destroy vai apagar o usuário e acionar o CASCADE para limpar Progressos, Views e Assinaturas.
             await user.destroy();
 
             return res.status(200).json({ message: "Dados do usuário excluídos com sucesso do banco." });
@@ -184,9 +169,10 @@ export default class AuthController {
             return res.status(500).json({ error: "Erro interno ao excluir dados do usuário." });
         }
     }
+    
     static async promoteToAdmin(req, res) {
         try {
-            const { targetUserId } = req.params; // ID do usuário que vai virar admin
+            const { targetUserId } = req.params; 
 
             const userToPromote = await User.findByPk(targetUserId);
 

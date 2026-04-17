@@ -8,6 +8,39 @@ const sanitize = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
 
 export default class MentoriaController {
 
+    // ==========================================
+    // 🤖 ROBÔ DE OTIMIZAÇÃO (COUNTER CACHE)
+    // Atualiza a coluna quantidadeMentorias no banco
+    // ==========================================
+    static async syncCategoryCounts() {
+        try {
+            await Categoria.update({ quantidadeMentorias: 0 }, { where: {} });
+
+            const contagens = await Categoria.findAll({
+                attributes: ['id', [db.fn('COUNT', db.col('mentorias.id')), 'total']],
+                include: [{
+                    model: Mentoria,
+                    as: 'mentorias',
+                    attributes: [],
+                    where: { status: 'ativo' },
+                    through: { attributes: [] }
+                }],
+                group: ['Categoria.id']
+            });
+
+            for (const c of contagens) {
+                await Categoria.update(
+                    { quantidadeMentorias: parseInt(c.get('total'), 10) },
+                    { where: { id: c.id } }
+                );
+            }
+            console.log("⚡ [OTIMIZAÇÃO] Contagem de categorias sincronizada com sucesso!");
+        } catch (error) {
+            console.error("Erro ao sincronizar categorias:", error);
+        }
+    }
+    // ==========================================
+
     static formatResponse(instance) {
         if (!instance) return null;
         const plain = instance.get({ plain: true });
@@ -45,6 +78,9 @@ export default class MentoriaController {
                 await novaMentoria.setCategorias(catsResolvidas.map(c => c[0].id));
             }
             
+            // 👇 Dispara a atualização do cache de categorias
+            await MentoriaController.syncCategoryCounts();
+
             res.status(201).json(novaMentoria);
         } catch (error) { 
             res.status(500).json({ error: error.message }); 
@@ -219,6 +255,9 @@ export default class MentoriaController {
                 await mentoria.setCategorias(catsResolvidas.map(c => c[0].id));
             }
 
+            // 👇 Dispara a atualização do cache de categorias após a edição
+            await MentoriaController.syncCategoryCounts();
+
             res.status(200).json({ message: "Mentoria atualizada com sucesso!", fotoUrl: novaFotoUrl });
         } catch (error) { 
             console.error("Erro no update da mentoria:", error);
@@ -240,21 +279,28 @@ export default class MentoriaController {
         }
     }
 
+    // 👇 OTIMIZADO: Faz uma leitura leve ignorando as categorias com count 0
     static async listAllCategories(req, res) {
         try {
-            const categorias = await Categoria.findAll({ order: [['nome', 'ASC']] });
+            const categorias = await Categoria.findAll({
+                where: { quantidadeMentorias: { [Op.gt]: 0 } },
+                order: [['quantidadeMentorias', 'DESC']]
+            });
             res.status(200).json(categorias);
         } catch (error) { 
+            console.error("Erro listAllCategories:", error);
             res.status(500).json({ error: error.message }); 
         }
     }
 
+    // 👇 OTIMIZADO: Faz uma leitura leve ignorando as categorias com count 0
     static async getExistingCategories(req, res) {
         try {
             const categorias = await Categoria.findAll({ 
-                attributes: ['nome'],
-                order: [['nome', 'ASC']] 
+                where: { quantidadeMentorias: { [Op.gt]: 0 } },
+                order: [['quantidadeMentorias', 'DESC']]
             });
+            
             res.status(200).json(categorias.map(c => c.nome));
         } catch (error) { 
             res.status(500).json({ error: error.message }); 
@@ -264,7 +310,11 @@ export default class MentoriaController {
     static async deleteFull(req, res) {
         try {
             const mentoria = await Mentoria.findByPk(req.params.id);
-            if (mentoria) await mentoria.destroy();
+            if (mentoria) {
+                await mentoria.destroy();
+                // 👇 Atualiza a contagem após remover a mentoria
+                await MentoriaController.syncCategoryCounts();
+            }
             res.status(200).json({ message: "Mentoria excluída com sucesso" });
         } catch (error) { 
             res.status(500).json({ error: error.message }); 

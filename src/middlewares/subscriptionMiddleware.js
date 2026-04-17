@@ -6,8 +6,6 @@ export const checkSubscription = async (req, res, next) => {
         const { uid } = req.user;
 
         // 1. BARREIRA PARA VISITANTES (GUEST)
-        // Se o uid for 'guest', ele nem vai no banco procurar usuário. 
-        // Economiza processamento e protege contra spam de requests.
         if (uid === 'guest') {
             return res.status(403).json({ 
                 message: "Acesso restrito. Crie uma conta gratuita para liberar 3 dias de conteúdo!", 
@@ -21,14 +19,13 @@ export const checkSubscription = async (req, res, next) => {
             return res.status(404).json({ message: "Usuário não sincronizado no banco de dados." });
         }
 
-        // 2. PASSE LIVRE PARA ADMIN
-        // Se for admin, não importa assinatura ou trial. É acesso total pra sempre.
+        // 2. PASSE LIVRE PARA ADMIN (A CORREÇÃO FOI AQUI)
         if (user.role === 'admin') {
+            console.log(`🛡️ [SUBSCRIPTION] Passe Livre concedido para o Admin: ${user.email}`);
             return next();
         }
 
         // 3. VERIFICAÇÃO DE ASSINATURA ATIVA (RevenueCat/Stripe)
-        // Se a flag isPremium estiver ativa (vinda do Webhook), libera.
         if (user.isPremium) {
             return next();
         }
@@ -47,14 +44,12 @@ export const checkSubscription = async (req, res, next) => {
         }
 
         // 4. VERIFICAÇÃO DE TRIAL (DEGUSTAÇÃO DE 3 DIAS)
-        // Se o usuário ainda estiver dentro do prazo de trial concedido no registro.
         if (user.trialExpiration && new Date() < new Date(user.trialExpiration)) {
             console.log(`💡 [SUBSCRIPTION] Usuário ${user.email} acessando via Trial.`);
             return next();
         }
 
         // 5. BLOQUEIO FINAL
-        // Se chegou aqui em produção, não é admin, não pagou e o trial venceu.
         return res.status(403).json({ 
             message: "Seu período de teste terminou. Assine um plano para continuar sua evolução!", 
             code: "SUBSCRIPTION_REQUIRED"

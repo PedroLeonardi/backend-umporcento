@@ -62,6 +62,11 @@ router.delete('/capitulos/:id', checkAuth, isAdmin, async (req, res) => {
     }
 });
 
+
+router.get('/forcar-sincronia', async (req, res) => {
+    await MentoriaController.syncCategoryCounts();
+    res.json({ message: "Robô acordou e contou tudo!" });
+});
 // 👇 Tratamento de Erros de Upload
 router.use((err, req, res, next) => {
     if (err instanceof multer.MulterError) {

@@ -25,12 +25,15 @@ const uploadMentoria = multer({
             return cb(new Error('FORMATO_FOTO_INVALIDO'));
         }
         
-        if (file.fieldname === 'audio') {
-            // Aceita MP3, M4A, MP4, OGG, WAV e AAC (Gravadores nativos mobile)
+if (file.fieldname === 'audio') {
+            // Aceita APENAS MP3 e M4A para garantir compatibilidade entre iOS e Android
             const allowedAudios = [
-                'audio/mpeg', 'audio/mp4', 'audio/mp3', 'audio/x-m4a', 
-                'audio/ogg', 'audio/wav', 'audio/x-wav', 'audio/aac'
+                'audio/mpeg', 
+                'audio/mp3', 
+                'audio/m4a', 
+                'audio/x-m4a'
             ];
+            
             if (allowedAudios.includes(file.mimetype)) return cb(null, true);
             return cb(new Error('FORMATO_AUDIO_INVALIDO'));
         }
@@ -75,8 +78,9 @@ router.use((err, req, res, next) => {
         }
     } else if (err.message === 'FORMATO_FOTO_INVALIDO') {
         return res.status(400).json({ message: "Formato de foto inválido (Use JPG, PNG, WEBP, HEIC, RAW)." });
-    } else if (err.message === 'FORMATO_AUDIO_INVALIDO') {
-        return res.status(400).json({ message: "Formato de áudio inválido (Use MP3, M4A, OGG, WAV, AAC)." });
+} else if (err.message === 'FORMATO_AUDIO_INVALIDO') {
+        // 👇 Mensagem atualizada
+        return res.status(400).json({ message: "Formato de áudio inválido. Para garantir que o player funcione em todos os celulares, envie apenas arquivos .MP3 ou .M4A." });
     }
     next(err);
 });

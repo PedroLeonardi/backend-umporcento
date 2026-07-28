@@ -1,5 +1,5 @@
 @echo off
-set "OUTPUT=relatorio_projeto.txt"
+set "OUTPUT=relatorio_projeto-BE.txt"
 
 echo ========================================================
 echo Gerando relatorio (Metodo Universal - Sem Git)

@@ -212,7 +212,6 @@ export default class AuthController {
             }
             const providerId = firebase.sign_in_provider;
 
-            // Verifica se a Master Key foi enviada no Header de uma requisição específica
             const adminKey = req.headers['x-admin-key'];
             const isMaster = adminKey === process.env.ADMIN_MASTER_KEY;
 
@@ -227,7 +226,6 @@ export default class AuthController {
                 }
             });
 
-            // Lógica de Trial de 3 dias para novos usuários
             if (created) {
                 const trialDays = 3;
                 const expiration = new Date();
@@ -238,13 +236,11 @@ export default class AuthController {
                 console.log(`🎁 [TRIAL] 3 dias concedidos para ${user.email}`);
             }
 
-            // Se o usuário já existia mas você enviou a chave agora, ele vira admin
             if (!created && isMaster && user.role !== 'admin') {
                 user.role = 'admin';
                 await user.save();
             }
 
-            // AQUI ESTÁ A ALTERAÇÃO: Enviando o trialExpiration e isPremium no JSON
             return res.status(200).json({
                 message: isMaster ? "Acesso administrativo sincronizado" : "Usuário sincronizado",
                 user: {
@@ -253,8 +249,9 @@ export default class AuthController {
                     email: user.email,
                     role: user.role,
                     foto: user.foto,
-                    isPremium: user.isPremium, // Importante para o front saber se é Pro
-                    trialExpiration: user.trialExpiration // <--- CAMPO ADICIONADO AQUI
+                    // 👇 A MÁGICA: O Front-end acha que o Admin é premium!
+                    isPremium: user.isPremium || user.role === 'admin', 
+                    trialExpiration: user.trialExpiration 
                 }
             });
         } catch (error) {
@@ -291,7 +288,6 @@ export default class AuthController {
 
             await user.save();
 
-            // TAMBÉM ATUALIZADO AQUI para manter a consistência no retorno do perfil
             return res.status(200).json({
                 message: "Perfil atualizado com sucesso",
                 user: {
@@ -300,8 +296,9 @@ export default class AuthController {
                     email: user.email,
                     role: user.role,
                     foto: user.foto,
-                    isPremium: user.isPremium,
-                    trialExpiration: user.trialExpiration // <--- CAMPO ADICIONADO AQUI
+                    // 👇 Aplicado aqui também para manter consistência
+                    isPremium: user.isPremium || user.role === 'admin',
+                    trialExpiration: user.trialExpiration 
                 }
             });
 
@@ -313,15 +310,8 @@ export default class AuthController {
 
     static async sendPasswordReset(req, res) {
         try {
-            const { email } = req.user; // Pega o e-mail do token autenticado
-
-            // O Firebase Admin gera um link, mas o jeito mais seguro para o usuário 
-            // é usar o método do Client SDK (Mobile). 
-            // Mas via Admin, podemos gerar o link:
+            const { email } = req.user; 
             const link = await admin.auth().generatePasswordResetLink(email);
-
-            // Aqui você poderia enviar um e-mail via SendGrid/Nodemailer
-            // Por simplicidade e segurança, retornamos sucesso para o Mobile disparar o método nativo.
             return res.status(200).json({ message: "Link de redefinição gerado", link });
         } catch (error) {
             return res.status(500).json({ error: "Erro ao solicitar redefinição" });
@@ -336,14 +326,12 @@ export default class AuthController {
                 return res.status(400).json({ message: "E-mail não fornecido." });
             }
 
-            // Verifica no banco Neon se o usuário existe
             const user = await User.findOne({ where: { email } });
 
             if (!user) {
                 return res.status(404).json({ exists: false, message: "E-mail não encontrado no sistema." });
             }
 
-            // Impede redefinição de quem loga só pelo Google
             if (user.provedor === 'google.com') {
                 return res.status(400).json({
                     exists: true,
@@ -351,7 +339,6 @@ export default class AuthController {
                 });
             }
 
-            // Retorna um JSON bonitinho confirmando que está tudo certo
             return res.status(200).json({ exists: true });
         } catch (error) {
             console.error("Erro ao checar e-mail:", error);
@@ -359,10 +346,9 @@ export default class AuthController {
         }
     }
 
-    // 👇 NOVA FUNÇÃO AQUI: Responsável por apagar os dados do usuário para a LGPD
     static async deleteUser(req, res) {
         try {
-            const { uid } = req.user; // Vem do token do Firebase validado pelo middleware
+            const { uid } = req.user; 
 
             const user = await User.findOne({ where: { firebaseUid: uid } });
 
@@ -370,7 +356,6 @@ export default class AuthController {
                 return res.status(404).json({ message: "Usuário não encontrado no banco de dados." });
             }
 
-            // O destroy vai apagar o usuário e acionar o CASCADE para limpar Progressos, Views e Assinaturas.
             await user.destroy();
 
             return res.status(200).json({ message: "Dados do usuário excluídos com sucesso do banco." });
@@ -380,9 +365,10 @@ export default class AuthController {
             return res.status(500).json({ error: "Erro interno ao excluir dados do usuário." });
         }
     }
+    
     static async promoteToAdmin(req, res) {
         try {
-            const { targetUserId } = req.params; // ID do usuário que vai virar admin
+            const { targetUserId } = req.params; 
 
             const userToPromote = await User.findByPk(targetUserId);
 
@@ -419,6 +405,39 @@ import db from '../config/database.js';
 const sanitize = (name) => name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, "_").replace(/[^a-zA-Z0-9._-]/g, "");
 
 export default class MentoriaController {
+
+    // ==========================================
+    // 🤖 ROBÔ DE OTIMIZAÇÃO (COUNTER CACHE)
+    // Atualiza a coluna quantidadeMentorias no banco
+    // ==========================================
+    static async syncCategoryCounts() {
+        try {
+            await Categoria.update({ quantidadeMentorias: 0 }, { where: {} });
+
+            const contagens = await Categoria.findAll({
+                attributes: ['id', [db.fn('COUNT', db.col('mentorias.id')), 'total']],
+                include: [{
+                    model: Mentoria,
+                    as: 'mentorias',
+                    attributes: [],
+                    where: { status: 'ativo' },
+                    through: { attributes: [] }
+                }],
+                group: ['Categoria.id']
+            });
+
+            for (const c of contagens) {
+                await Categoria.update(
+                    { quantidadeMentorias: parseInt(c.get('total'), 10) },
+                    { where: { id: c.id } }
+                );
+            }
+            console.log("⚡ [OTIMIZAÇÃO] Contagem de categorias sincronizada com sucesso!");
+        } catch (error) {
+            console.error("Erro ao sincronizar categorias:", error);
+        }
+    }
+    // ==========================================
 
     static formatResponse(instance) {
         if (!instance) return null;
@@ -457,6 +476,9 @@ export default class MentoriaController {
                 await novaMentoria.setCategorias(catsResolvidas.map(c => c[0].id));
             }
             
+            // 👇 Dispara a atualização do cache de categorias
+            await MentoriaController.syncCategoryCounts();
+
             res.status(201).json(novaMentoria);
         } catch (error) { 
             res.status(500).json({ error: error.message }); 
@@ -631,6 +653,9 @@ export default class MentoriaController {
                 await mentoria.setCategorias(catsResolvidas.map(c => c[0].id));
             }
 
+            // 👇 Dispara a atualização do cache de categorias após a edição
+            await MentoriaController.syncCategoryCounts();
+
             res.status(200).json({ message: "Mentoria atualizada com sucesso!", fotoUrl: novaFotoUrl });
         } catch (error) { 
             console.error("Erro no update da mentoria:", error);
@@ -652,21 +677,28 @@ export default class MentoriaController {
         }
     }
 
+    // 👇 OTIMIZADO: Faz uma leitura leve ignorando as categorias com count 0
     static async listAllCategories(req, res) {
         try {
-            const categorias = await Categoria.findAll({ order: [['nome', 'ASC']] });
+            const categorias = await Categoria.findAll({
+                where: { quantidadeMentorias: { [Op.gt]: 0 } },
+                order: [['quantidadeMentorias', 'DESC']]
+            });
             res.status(200).json(categorias);
         } catch (error) { 
+            console.error("Erro listAllCategories:", error);
             res.status(500).json({ error: error.message }); 
         }
     }
 
+    // 👇 OTIMIZADO: Faz uma leitura leve ignorando as categorias com count 0
     static async getExistingCategories(req, res) {
         try {
             const categorias = await Categoria.findAll({ 
-                attributes: ['nome'],
-                order: [['nome', 'ASC']] 
+                where: { quantidadeMentorias: { [Op.gt]: 0 } },
+                order: [['quantidadeMentorias', 'DESC']]
             });
+            
             res.status(200).json(categorias.map(c => c.nome));
         } catch (error) { 
             res.status(500).json({ error: error.message }); 
@@ -676,7 +708,11 @@ export default class MentoriaController {
     static async deleteFull(req, res) {
         try {
             const mentoria = await Mentoria.findByPk(req.params.id);
-            if (mentoria) await mentoria.destroy();
+            if (mentoria) {
+                await mentoria.destroy();
+                // 👇 Atualiza a contagem após remover a mentoria
+                await MentoriaController.syncCategoryCounts();
+            }
             res.status(200).json({ message: "Mentoria excluída com sucesso" });
         } catch (error) { 
             res.status(500).json({ error: error.message }); 
@@ -1510,8 +1546,6 @@ export const checkSubscription = async (req, res, next) => {
         const { uid } = req.user;
 
         // 1. BARREIRA PARA VISITANTES (GUEST)
-        // Se o uid for 'guest', ele nem vai no banco procurar usuário. 
-        // Economiza processamento e protege contra spam de requests.
         if (uid === 'guest') {
             return res.status(403).json({ 
                 message: "Acesso restrito. Crie uma conta gratuita para liberar 3 dias de conteúdo!", 
@@ -1525,14 +1559,13 @@ export const checkSubscription = async (req, res, next) => {
             return res.status(404).json({ message: "Usuário não sincronizado no banco de dados." });
         }
 
-        // 2. PASSE LIVRE PARA ADMIN
-        // Se for admin, não importa assinatura ou trial. É acesso total pra sempre.
+        // 2. PASSE LIVRE PARA ADMIN (A CORREÇÃO FOI AQUI)
         if (user.role === 'admin') {
+            console.log(`🛡️ [SUBSCRIPTION] Passe Livre concedido para o Admin: ${user.email}`);
             return next();
         }
 
         // 3. VERIFICAÇÃO DE ASSINATURA ATIVA (RevenueCat/Stripe)
-        // Se a flag isPremium estiver ativa (vinda do Webhook), libera.
         if (user.isPremium) {
             return next();
         }
@@ -1551,14 +1584,12 @@ export const checkSubscription = async (req, res, next) => {
         }
 
         // 4. VERIFICAÇÃO DE TRIAL (DEGUSTAÇÃO DE 3 DIAS)
-        // Se o usuário ainda estiver dentro do prazo de trial concedido no registro.
         if (user.trialExpiration && new Date() < new Date(user.trialExpiration)) {
             console.log(`💡 [SUBSCRIPTION] Usuário ${user.email} acessando via Trial.`);
             return next();
         }
 
         // 5. BLOQUEIO FINAL
-        // Se chegou aqui em produção, não é admin, não pagou e o trial venceu.
         return res.status(403).json({ 
             message: "Seu período de teste terminou. Assine um plano para continuar sua evolução!", 
             code: "SUBSCRIPTION_REQUIRED"
@@ -1664,7 +1695,14 @@ import db from '../config/database.js';
 
 const Categoria = db.define('Categoria', {
     id: { type: DataTypes.INTEGER, autoIncrement: true, primaryKey: true },
-    nome: { type: DataTypes.STRING, unique: true, allowNull: false }
+    nome: { type: DataTypes.STRING, unique: true, allowNull: false },
+    
+    // 👇 NOVA COLUNA PARA OTIMIZAÇÃO DE PROCESSAMENTO
+    quantidadeMentorias: { 
+        type: DataTypes.INTEGER, 
+        defaultValue: 0,
+        comment: 'Cache do total de mentorias ativas nesta categoria'
+    }
 }, { tableName: 'categorias', timestamps: false });
 
 export default Categoria;
@@ -2134,6 +2172,11 @@ router.delete('/capitulos/:id', checkAuth, isAdmin, async (req, res) => {
     }
 });
 
+
+router.get('/forcar-sincronia', async (req, res) => {
+    await MentoriaController.syncCategoryCounts();
+    res.json({ message: "Robô acordou e contou tudo!" });
+});
 // 👇 Tratamento de Erros de Upload
 router.use((err, req, res, next) => {
     if (err instanceof multer.MulterError) {
@@ -2308,6 +2351,8 @@ import rateLimit from 'express-rate-limit';
 
 // 👇 Importando o nosso novo middleware de proteção XSS
 import { xssProtect } from './middlewares/xssMiddleware.js';
+
+
 
 import routesTeste from './routes/testeRoutes.js';
 import questao from './routes/questaoRoutes.js'

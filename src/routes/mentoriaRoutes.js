@@ -13,7 +13,7 @@ const router = Router();
 const uploadMentoria = multer({ 
     storage: multer.memoryStorage(),
     limits: {
-        fileSize: 50 * 1024 * 1024, // Limite de 50MB para áudios longos e imagens RAW
+        fileSize: 150 * 1024 * 1024, // Limite de 50MB para áudios longos e imagens RAW
     },
     fileFilter: (req, file, cb) => {
         if (file.fieldname === 'foto') {
@@ -74,7 +74,7 @@ router.get('/forcar-sincronia', async (req, res) => {
 router.use((err, req, res, next) => {
     if (err instanceof multer.MulterError) {
         if (err.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ message: "O arquivo excedeu o limite máximo de 50MB." });
+            return res.status(400).json({ message: "O arquivo excedeu o limite máximo de 150MB." });
         }
     } else if (err.message === 'FORMATO_FOTO_INVALIDO') {
         return res.status(400).json({ message: "Formato de foto inválido (Use JPG, PNG, WEBP, HEIC, RAW)." });
